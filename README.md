@@ -9,4 +9,4 @@ A reliable work queuing library backed by Redis.
 3. Distributed without race conditions among workers.
 4. Ability to view and modify queue contents (cancel job/clear queue).
 
-Most queuing libraries only have a subset of these properties and I required them all.
+Most queuing libraries only have a subset of these properties.
