@@ -7,7 +7,22 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"strconv"
+	// "time"
 )
+
+// time.RFC3339 // "2006-01-02T15:04:05Z07:00"
+const (
+	MDY = "01/02/2006"
+)
+
+func itos(i int) string {
+	return fmt.Sprintf("%d", i)
+}
+
+func i64tos(i int64) string {
+	return fmt.Sprintf("%d", i)
+}
 
 // Job is an object representing the item stored in the queue.
 type Job struct {
@@ -23,6 +38,20 @@ type Job struct {
 	// Not required - Set by user
 	ContentType string // ContentType of the payload IE. 'application/json'.
 	Encoding    string // Encoding of the payload.
+}
+
+func (job *Job) ToStringArray() {
+	return [...]string{
+		"priority", itos(job.Priority),
+		"jobid", job.JobID,
+		"payload", job.Payload,
+		"failures", itos(job.Failures),
+		"dateadded", i64tos(job.DateAdded),
+		"datefailed", i64tos(job.DateFailed),
+		"worker", job.Worker,
+		"contenttype", job.ContentType,
+		"encoding", job.Encoding,
+	}
 }
 
 // MakeJobID generates a random Job ID.
