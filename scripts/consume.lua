@@ -1,0 +1,5 @@
+-- [[
+-- consume
+-- Keys: <queue_key> <working_key> <job_ns> <maxjobs_key>
+-- <workers_key> <active_key>
+-- Args: <worker_name> <datetime> [<key> <val> ...]
