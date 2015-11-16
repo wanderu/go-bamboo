@@ -23,6 +23,7 @@ if current_score and priority >= current_score then
     return 0;
 end
 
+-- result = redis.pcall("HMSET", job_key, "priority", priority);
 result = redis.pcall("HMSET", job_key, unpack(job_data));
 result = redis.pcall("ZADD",  queue_key, priority, job_id);
 
