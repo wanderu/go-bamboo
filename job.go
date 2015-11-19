@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
-	"strconv"
+	// "strconv"
 	// "time"
 )
 
@@ -40,8 +40,8 @@ type Job struct {
 	Encoding    string // Encoding of the payload.
 }
 
-func (job *Job) ToStringArray() {
-	return [...]string{
+func (job *Job) ToStringArray() []string {
+	return []string{
 		"priority", itos(job.Priority),
 		"jobid", job.JobID,
 		"payload", job.Payload,
