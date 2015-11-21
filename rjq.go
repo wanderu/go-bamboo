@@ -19,21 +19,22 @@ const SEP string = ":"
 
 var ScriptNames = [...]string{
 	"enqueue",
-	// "consume",
-	// "remove", // Can be accomplished with consume+ack
+	"consume",
 	// "ack",
 	// "fail",
+	// "test",
+	// "remove", // Can be accomplished with consume+ack
 }
 
 // Example Usage
 // 	url := "redis://localhost:6379/0"
 // 	conn := bamboo.MakeConnFromUrl(url)
-// 	queue := &RJQ{Client: conn, Namespace: "MYAPP"}
+// 	queue := &RJQ{Client: conn, Namespace: "MYAPP:QSET1"}
+// Namespaces are colon-separated string segments.
 type RJQ struct {
-	Namespace string // Namespace within which all queues exist.
-	// Client    *Conn               // Redis connection.
-	Client  *redis.Client            // Redis connection.
-	Scripts map[string]*redis.Script // map of script name to redis.Script objects.
+	Namespace string                   // Namespace within which all queues exist.
+	Client    *redis.Client            // Redis connection.
+	Scripts   map[string]*redis.Script // map of script name to redis.Script objects.
 }
 
 type ConnectionError string
@@ -42,17 +43,7 @@ func (e ConnectionError) Error() string {
 	return fmt.Sprintf("ConnectionError: %s", e)
 }
 
-/*
-Conn: An object representing the redis connection. This separate object is used
-in order to abstract the redis client library.  User code only needs to create
-a Conn object using the provided MakeConn and MakeConnFromUrl functions and
-pass the result to RJQ.
-*/
-// type Conn struct {
-// 	client redis.Client
-// }
-
-/* MakeConn
+/* MakeConn returns a redis connection object expected by RJQ.
  */
 func MakeConn(host string, port int, pass string, db int64) (conn *redis.Client, err error) {
 	client := redis.NewClient(&redis.Options{
@@ -61,10 +52,11 @@ func MakeConn(host string, port int, pass string, db int64) (conn *redis.Client,
 		DB:         db,
 		MaxRetries: MAX_RETRIES,
 	})
-	// conn = &Conn{client: client}
 	return client, nil
 }
 
+/* MakeConnFromUrl returns a redis connection object expected by RJQ.
+ */
 func MakeConnFromUrl(rawurl string) (conn *redis.Client, err error) {
 	host, port := "127.0.0.1", 6379
 	urlp, err := url.Parse(rawurl)
@@ -110,34 +102,59 @@ func MakeKey(keys ...string) string {
 }
 
 func (rjq *RJQ) Add(job *Job) error {
-	queue_k := MakeKey(rjq.Namespace, "QUEUED")
-	jobs_k := MakeKey(rjq.Namespace, "JOBS", job.JobID)
-	keys := []string{queue_k, jobs_k}
+	keys := []string{rjq.Namespace}
 	args := []string{fmt.Sprintf("%d", job.Priority), job.JobID}
-	for _, v := range job.ToStringArray() {
-		args = append(args, v)
-	}
+	args = append(args, job.ToStringArray()...)
 	script := rjq.Scripts["enqueue"]
-	// fmt.Println("calling enqueue")
-	// fmt.Println(args)
-	res := script.Eval(rjq.Client, keys, args)
-	fmt.Println("---")
-	fmt.Println(res)
-	fmt.Println("---")
-	if res.Err() != nil {
-		return res.Err()
+	val, err := script.EvalSha(rjq.Client, keys, args).Result()
+	if err != nil {
+		return err
 	}
-	// rjq.Connection.ZAdd(queued_k, score, job.id)
-	// rjq.Connection.HMSet(jobs_k, (job.ToStringArray()))
+	if val == 0 {
+		// TODO: log that item already existed on queue
+	} else {
+		// TODO: log successful addition of job
+	}
 	return nil
 }
 
+/* GetOne returns the next available Job object from the queue.
+
+Returns an error if arguments are invalid.
+Returns an expected error if the max number of jobs has been reached for the
+namespace.
+
+Known error reply prefixes:
+	MAXJOBS: The maximum number of simultaneous jobs has been reached.
+*/
 func (rjq *RJQ) GetOne() (*Job, error) {
-	var job *Job
+	keys := []string{rjq.Namespace}
+	args := []string{"", "", "", ""}
+	script := rjq.Scripts["consume"]
+
+	res := script.EvalSha(rjq.Client, keys, args)
+	if res.Err() != nil {
+		fmt.Println(res.Err())
+		return nil, res.Err()
+	}
+
+	// Convert the result into a string array and then into a Job object
+	vals := res.Val().([]interface{})
+	strs := make([]string, len(vals))
+	for i, val := range vals {
+		strs[i] = val.(string)
+	}
+
+	job, err := JobFromStringArray(strs)
+	if err != nil {
+		return nil, err
+	}
 	return job, nil
 }
 
-func (rjq *RJQ) Get(string) (*Job, error) {
+/* Get returns a Job object matching the specified jobid.
+ */
+func (rjq *RJQ) Get(jobid string) (*Job, error) {
 	var job *Job
 	return job, nil
 }
@@ -162,3 +179,24 @@ func (rjq *RJQ) Jobs(int) ([]*Job, error) {
 func (rjq *RJQ) Cancel(*Job) error {
 	return nil
 }
+
+/*
+func (rjq *RJQ) Test() error {
+	script := rjq.Scripts["test"]
+	val, err := script.EvalSha(rjq.Client, []string{}, []string{}).Result()
+	if strings.HasPrefix(err.Error(), "MAXJOBS") {
+		fmt.Println("Found MAXJOBS Error")
+	}
+	fmt.Println("Error", err)
+	fmt.Println("Result", val)
+	return err
+}
+*/
+
+// queue_k := MakeKey(rjq.Namespace, "QUEUED")
+// jobs_k := MakeKey(rjq.Namespace, "JOBS", job.JobID)
+// queue_k := MakeKey(rjq.Namespace, "QUEUED")
+// working_k := MakeKey(rjq.Namespace, "QUEUED")
+// job_ns := rjq.Namespace
+// maxjobs_k := MakeKey(rjq.Namespace, "MAXJOBS")
+// keys := []string{queue_k, working_k, job_ns, maxjobs_k}

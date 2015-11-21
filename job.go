@@ -4,11 +4,11 @@
 package bamboo
 
 import (
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
-	// "strconv"
-	// "time"
+	"strconv"
 )
 
 // time.RFC3339 // "2006-01-02T15:04:05Z07:00"
@@ -38,6 +38,51 @@ type Job struct {
 	// Not required - Set by user
 	ContentType string // ContentType of the payload IE. 'application/json'.
 	Encoding    string // Encoding of the payload.
+}
+
+func JobFromStringArray(arr []string) (*Job, error) {
+	job := &Job{}
+	var err interface{}
+	for i := 0; i < len(arr); i++ {
+		key := arr[i]
+		i++
+		val := arr[i]
+		switch key {
+		case "priority":
+			job.Priority, err = strconv.Atoi(val)
+			if err != nil {
+				return nil, errors.New("Could not convert priority to int.")
+			}
+		case "jobid":
+			job.JobID = val
+		case "payload":
+			job.Payload = val
+		case "failures":
+			job.Failures, err = strconv.Atoi(val)
+			if err != nil {
+				return nil, errors.New("Cound not convert failures to int.")
+			}
+		case "dateadded":
+			job.DateAdded, err = strconv.ParseInt(val, 10, 64)
+			if err != nil {
+				return nil, errors.New("Cound not convert dateadded to int.")
+			}
+		case "datefailed":
+			job.DateFailed, err = strconv.ParseInt(val, 10, 64)
+			if err != nil {
+				return nil, errors.New("Cound not convert datefailed to int.")
+			}
+		case "worker":
+			job.Worker = val
+		case "contenttype":
+			job.ContentType = val
+		case "encoding":
+			job.Encoding = val
+		default:
+			return nil, errors.New(fmt.Sprintf("Invalid key: %s", key))
+		}
+	}
+	return job, nil
 }
 
 func (job *Job) ToStringArray() []string {

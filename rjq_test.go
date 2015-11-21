@@ -6,6 +6,7 @@ package bamboo
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -16,6 +17,13 @@ func TestMakeKey(t *testing.T) {
 	if key != expected {
 		t.Errorf("MakeKey() Returned %s Expected %s", key, expected)
 	}
+}
+
+func TestTest(t *testing.T) {
+	ns := "TEST"
+	conn, _ := MakeConn("localhost", 6379, "", 0)
+	rjq := MakeQueue(ns, conn)
+	rjq.Test()
 }
 
 func TestAdd(t *testing.T) {
@@ -34,25 +42,48 @@ func TestAdd(t *testing.T) {
 	}
 	job1id := "job1"
 	job := &Job{
-		JobID: job1id, Priority: 5, Payload: string(payload),
+		JobID:       job1id,
+		Priority:    5,
+		Payload:     string(payload),
 		ContentType: "application/json",
 		Worker:      GenerateWorkerName(),
 		DateAdded:   time.Now().UTC().Unix(),
 	}
+
+	job_key := MakeKey(rjq.Namespace, "JOBS", job1id)
+
+	// Make sure it doesn't exist yet before adding
+	_ = rjq.Client.Del(job_key)
+
 	rjq.Add(job)
 
-	job_hm := rjq.Client.HMGet(
-		MakeKey(rjq.Namespace, "JOBS", job1id), "*")
-	if job_hm.Err() != nil {
-		t.Error(job_hm.Err())
+	// 3. Test the stored job data directly in Redis
+	job_arr, err := rjq.Client.HGetAll(job_key).Result()
+	if err != nil {
+		t.Error(err)
 	}
-	job_map := job_hm.Val()
-	fmt.Println(job_map)
-	// if job_map["a"] != "A" {
-	// 	t.Error("Bad data")
-	// }
 
-	// 3. Verify Count
+	// 3b. Test conversion to Job object
+	job2, err := JobFromStringArray(job_arr)
+	if err != nil {
+		t.Error(err)
+	}
+	fmt.Println(job2)
+
+	if !reflect.DeepEqual(job, job2) {
+		t.Error("Job data doesn't match.")
+	}
+
 	// 4. Consume Job
+	job3, err := rjq.GetOne()
+	fmt.Println(job3)
+
 	// 5. Verify Job Contents
+	if !reflect.DeepEqual(job, job3) {
+		t.Error("Job data doesn't match.")
+	}
+
+	// 6. Test that the Job is on the right queue
+	// 7. Ack the Job
+	// 8. Test that the Job does not exist on any queue
 }
