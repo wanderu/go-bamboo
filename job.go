@@ -7,8 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
-	"os"
 	"strconv"
+	"strings"
 )
 
 // time.RFC3339 // "2006-01-02T15:04:05Z07:00"
@@ -20,6 +20,10 @@ func itos(i int) string {
 	return fmt.Sprintf("%d", i)
 }
 
+func f64tos(f float64) string {
+	return fmt.Sprintf("%f", f)
+}
+
 func i64tos(i int64) string {
 	return fmt.Sprintf("%d", i)
 }
@@ -27,29 +31,31 @@ func i64tos(i int64) string {
 // Job is an object representing the item stored in the queue.
 type Job struct {
 	// Required - Set by user
-	Priority int    // Used by priority queues for ordering.
-	JobID    string // Unique per queue instance.
-	Payload  string // Byte string.
+	Priority float64 // Used by priority queues for ordering.
+	JobID    string  // Unique per queue instance.
+	Payload  string  // Byte string.
 	// Set by queuing system
 	Failures   int    // Number of failures so far.
 	DateAdded  int64  // Unix Timestamp of the job creation date.
 	DateFailed int64  // Unix Timestamp of the last failure.
-	Worker     string // Name of the worker process.
+	Consumed   int64  // Unix Timestamp of the date this job was consumed.
+	Owner      string // Name of the worker process.
 	// Not required - Set by user
 	ContentType string // ContentType of the payload IE. 'application/json'.
 	Encoding    string // Encoding of the payload.
+	State       string // Encoding of the payload.
 }
 
 func JobFromStringArray(arr []string) (*Job, error) {
 	job := &Job{}
 	var err interface{}
 	for i := 0; i < len(arr); i++ {
-		key := arr[i]
+		key := strings.ToLower(arr[i]) // key is compared lowercase
 		i++
 		val := arr[i]
 		switch key {
 		case "priority":
-			job.Priority, err = strconv.Atoi(val)
+			job.Priority, err = strconv.ParseFloat(val, 64)
 			if err != nil {
 				return nil, errors.New("Could not convert priority to int.")
 			}
@@ -72,12 +78,19 @@ func JobFromStringArray(arr []string) (*Job, error) {
 			if err != nil {
 				return nil, errors.New("Cound not convert datefailed to int.")
 			}
-		case "worker":
-			job.Worker = val
+		case "consumed":
+			job.Consumed, err = strconv.ParseInt(val, 10, 64)
+			if err != nil {
+				return nil, errors.New("Cound not convert consumed to int.")
+			}
+		case "owner":
+			job.Owner = val
 		case "contenttype":
 			job.ContentType = val
 		case "encoding":
 			job.Encoding = val
+		case "state":
+			job.State = val
 		default:
 			return nil, errors.New(fmt.Sprintf("Invalid key: %s", key))
 		}
@@ -87,31 +100,23 @@ func JobFromStringArray(arr []string) (*Job, error) {
 
 func (job *Job) ToStringArray() []string {
 	return []string{
-		"priority", itos(job.Priority),
+		"priority", f64tos(job.Priority),
 		"jobid", job.JobID,
 		"payload", job.Payload,
 		"failures", itos(job.Failures),
 		"dateadded", i64tos(job.DateAdded),
 		"datefailed", i64tos(job.DateFailed),
-		"worker", job.Worker,
+		"consumed", i64tos(job.Consumed),
+		"owner", job.Owner,
 		"contenttype", job.ContentType,
 		"encoding", job.Encoding,
+		"state", job.State,
 	}
 }
 
 // MakeJobID generates a random Job ID.
 func MakeJobID() string {
 	return fmt.Sprintf("%d", rand.Int63())
-}
-
-func GenerateWorkerName() string {
-	pid := os.Getpid()
-	host, err := os.Hostname()
-	// TODO: Warn hostname retrieval failed.
-	if err != nil {
-		host = fmt.Sprintf("%d", rand.Int31())
-	}
-	return fmt.Sprintf("%s-%d", host, pid)
 }
 
 /*

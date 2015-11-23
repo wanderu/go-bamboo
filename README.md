@@ -19,3 +19,81 @@ Most queuing libraries only have a subset of these properties.
 Namespaces are colon-separated string segments under which a queue set
 will exist. For example, an application may have 1 set of queues under
 `MYAPP:AJOBS` and another queue set under `MYAPP:BJOBS`.
+
+## Advanced
+
+### Building the Lua Scripts
+
+The Lua scripts required for this project are shared between multiple
+libraries. In order to build with them the bamboo-scripts repo must be checked
+out locally and available 
+
+    - Set the `BAMBOO_SCRIPTS_PFX` and `BAMBOO_SCRIPTS` environment variables to
+    point to */path/to* and */path/to/bamboo-scripts* respectively.
+    - Run `go generate` in the project directory.
+
+## Writing a Library in Another Language
+
+### The Job Object
+
+The Job object represents the a Job in the queueing system.
+
+Fields:
+
+    - Priority
+    - JobID
+    - Payload
+    - Failures
+    - DateAdded
+    - DateFailed
+    - Owner
+    - ContentType
+    - Encoding
+    - State
+
+Methods:
+
+    - ToJobArray()
+    - FromStringArray()
+
+### The RJQ Object
+
+Fields:
+
+    - Namespace
+    - Client Name (Worker Name)
+
+Methods:
+
+    - `Enqueue(job)`
+        - Uses `bamboo-scripts/enqueue.lua`.
+    - `Schedule(job, datetime)`
+    - `Consume(job_id)`
+        - Uses `bamboo-scripts/consume.lua`.
+    - `Remove(...job_id)`
+    - `Clear`
+    - `Delete`
+    - `Ack`
+        - Uses `bamboo-scripts/ack.lua`.
+    - `Fail`
+        - Uses `bamboo-scripts/fail.lua`.
+    - `RecoverAbandoned`
+    - `ListJobs(queue)`
+    - `GetCount(queue)`
+    - `ListWorkers(queue)`
+    - `Ping(expires)`
+    - `MaxFailed()`
+        - Set the maximum number of job failure for retry.
+    - `MaxFailed(int)`
+        - Retrieve the maximum number of job failures for retry.
+    - `MaxJobs()`
+        - Set the maximum number of simultaneously consumed jobs.
+    - `MaxJobs(int)`
+        - Retrieve the maximum number of simultaneously consumed jobs.
+
+Parameters:
+
+    - job: Job object.
+    - datetime: Unix UTC seconds since epoch.
+    - queue: One of queue, working, scheduled
+    - expires: Seconds.

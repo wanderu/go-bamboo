@@ -3,12 +3,18 @@
 
 package bamboo
 
-//go:generate go-bindata -pkg $GOPACKAGE -o scripts.go scripts/
+// Use `go generate` within the project directory after setting the
+// BAMBOO_SCRIPTS_PFX and BAMBOO_SCRIPTS environment variables to generate the
+// bamboo-scripts.go file.
+//
+//go:generate go-bindata -prefix $BAMBOO_SCRIPTS_PFX -pkg $GOPACKAGE -o bamboo-scripts.go $BAMBOO_SCRIPTS
 
 import (
 	"fmt"
 	"gopkg.in/redis.v3"
+	"math/rand"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -20,9 +26,9 @@ const SEP string = ":"
 var ScriptNames = [...]string{
 	"enqueue",
 	"consume",
-	// "ack",
-	// "fail",
-	// "test",
+	"ack",
+	"fail",
+	"test",
 	// "remove", // Can be accomplished with consume+ack
 }
 
@@ -30,11 +36,12 @@ var ScriptNames = [...]string{
 // 	url := "redis://localhost:6379/0"
 // 	conn := bamboo.MakeConnFromUrl(url)
 // 	queue := &RJQ{Client: conn, Namespace: "MYAPP:QSET1"}
-// Namespaces are colon-separated string segments.
 type RJQ struct {
-	Namespace string                   // Namespace within which all queues exist.
-	Client    *redis.Client            // Redis connection.
-	Scripts   map[string]*redis.Script // map of script name to redis.Script objects.
+	Namespace  string                   // Namespace within which all queues exist.
+	Client     *redis.Client            // Redis connection.
+	Scripts    map[string]*redis.Script // map of script name to redis.Script objects.
+	WorkerName string
+	JobExp     int // Seconds until a job expires
 }
 
 type ConnectionError string
@@ -77,13 +84,29 @@ func MakeConnFromUrl(rawurl string) (conn *redis.Client, err error) {
 	return MakeConn(host, port, "", int64(db))
 }
 
+func GenerateWorkerName() string {
+	pid := os.Getpid()
+	host, err := os.Hostname()
+	// TODO: Warn hostname retrieval failed.
+	if err != nil {
+		host = fmt.Sprintf("%d", rand.Int31())
+	}
+	return fmt.Sprintf("%s-%d", host, pid)
+}
+
 func MakeQueue(ns string, conn *redis.Client) (rjq *RJQ) {
 	// Make the object
-	rjq = &RJQ{Namespace: ns, Client: conn, Scripts: make(map[string]*redis.Script)}
+	rjq = &RJQ{
+		Namespace:  ns,
+		Client:     conn,
+		Scripts:    make(map[string]*redis.Script),
+		WorkerName: GenerateWorkerName(),
+		JobExp:     90, // TODO: Parameterize
+	}
 
 	// Load scripts
 	for _, name := range ScriptNames {
-		scriptSrc, err := Asset(fmt.Sprintf("scripts/%s.lua", name))
+		scriptSrc, err := Asset(fmt.Sprintf("bamboo-scripts/%s.lua", name))
 		if err != nil {
 			panic(err) // Not loading the script means this program is incorrect.
 		}
@@ -103,13 +126,14 @@ func MakeKey(keys ...string) string {
 
 func (rjq *RJQ) Add(job *Job) error {
 	keys := []string{rjq.Namespace}
-	args := []string{fmt.Sprintf("%d", job.Priority), job.JobID}
+	args := []string{fmt.Sprintf("%f", job.Priority), job.JobID}
 	args = append(args, job.ToStringArray()...)
-	script := rjq.Scripts["enqueue"]
-	val, err := script.EvalSha(rjq.Client, keys, args).Result()
+	val, err := rjq.Scripts["enqueue"].EvalSha(rjq.Client, keys, args).Result()
 	if err != nil {
 		return err
 	}
+	// val should be 0 if the job already existed and 1 if the job was enqueued
+	// as expected.
 	if val == 0 {
 		// TODO: log that item already existed on queue
 	} else {
@@ -125,16 +149,20 @@ Returns an expected error if the max number of jobs has been reached for the
 namespace.
 
 Known error reply prefixes:
-	MAXJOBS: The maximum number of simultaneous jobs has been reached.
+	MAXJOBS_REACHED: The maximum number of simultaneous jobs has been reached.
 */
 func (rjq *RJQ) GetOne() (*Job, error) {
+	// <ns>
 	keys := []string{rjq.Namespace}
-	args := []string{"", "", "", ""}
-	script := rjq.Scripts["consume"]
+	// <client_name> <datetime> <job_id> <expires>
+	args := []string{
+		rjq.WorkerName,
+		fmt.Sprintf("%d", time.Now().UTC().Unix()),
+		"",
+		fmt.Sprintf("%d", rjq.JobExp)}
 
-	res := script.EvalSha(rjq.Client, keys, args)
+	res := rjq.Scripts["consume"].EvalSha(rjq.Client, keys, args)
 	if res.Err() != nil {
-		fmt.Println(res.Err())
 		return nil, res.Err()
 	}
 
@@ -163,11 +191,29 @@ func (rjq *RJQ) Schedule(*Job, time.Time) error {
 	return nil
 }
 
-func (rjq *RJQ) Ack(*Job) error {
+func (rjq *RJQ) Ack(job *Job) error {
+	keys := []string{rjq.Namespace}
+	args := []string{job.JobID}
+	res := rjq.Scripts["ack"].EvalSha(rjq.Client, keys, args)
+	if res.Err() != nil {
+		// UNKNOWN_JOB_ID
+		return res.Err()
+	}
 	return nil
 }
 
-func (rjq *RJQ) Fail(*Job) error {
+func (rjq *RJQ) Fail(job *Job) error {
+	keys := []string{rjq.Namespace}
+	args := []string{
+		job.JobID,
+		fmt.Sprintf("%d", time.Now().UTC().Unix()),
+		"", "",
+	}
+	res := rjq.Scripts["fail"].EvalSha(rjq.Client, keys, args)
+	if res.Err() != nil {
+		// UNKNOWN_JOB_ID
+		return res.Err()
+	}
 	return nil
 }
 
@@ -180,23 +226,13 @@ func (rjq *RJQ) Cancel(*Job) error {
 	return nil
 }
 
-/*
 func (rjq *RJQ) Test() error {
-	script := rjq.Scripts["test"]
-	val, err := script.EvalSha(rjq.Client, []string{}, []string{}).Result()
-	if strings.HasPrefix(err.Error(), "MAXJOBS") {
-		fmt.Println("Found MAXJOBS Error")
-	}
+	val, err := rjq.Scripts["test"].EvalSha(rjq.Client, []string{}, []string{}).Result()
+	// if strings.HasPrefix(err.Error(), "MAXJOBS") {
+	// 	fmt.Println("Found MAXJOBS Error")
+	// }
 	fmt.Println("Error", err)
 	fmt.Println("Result", val)
+	fmt.Printf("%#T\n", val)
 	return err
 }
-*/
-
-// queue_k := MakeKey(rjq.Namespace, "QUEUED")
-// jobs_k := MakeKey(rjq.Namespace, "JOBS", job.JobID)
-// queue_k := MakeKey(rjq.Namespace, "QUEUED")
-// working_k := MakeKey(rjq.Namespace, "QUEUED")
-// job_ns := rjq.Namespace
-// maxjobs_k := MakeKey(rjq.Namespace, "MAXJOBS")
-// keys := []string{queue_k, working_k, job_ns, maxjobs_k}
