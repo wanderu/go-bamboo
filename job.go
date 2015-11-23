@@ -29,21 +29,22 @@ func i64tos(i int64) string {
 }
 
 // Job is an object representing the item stored in the queue.
+// Volatile paramters change over the life time of the Job.
 type Job struct {
 	// Required - Set by user
 	Priority float64 // Used by priority queues for ordering.
 	JobID    string  // Unique per queue instance.
 	Payload  string  // Byte string.
 	// Set by queuing system
-	Failures   int    // Number of failures so far.
+	Failures   int    // Number of failures so far. (Volatile)
 	DateAdded  int64  // Unix Timestamp of the job creation date.
-	DateFailed int64  // Unix Timestamp of the last failure.
-	Consumed   int64  // Unix Timestamp of the date this job was consumed.
-	Owner      string // Name of the worker process.
+	DateFailed int64  // Unix Timestamp of the last failure. (Volatile)
+	Consumed   int64  // Unix Timestamp of the date this job was consumed. (Volatile)
+	Owner      string // Name of the worker process. (Volatile)
 	// Not required - Set by user
 	ContentType string // ContentType of the payload IE. 'application/json'.
 	Encoding    string // Encoding of the payload.
-	State       string // Encoding of the payload.
+	State       string // Job state. "enqueued", "working", "failed". (Volatile)
 }
 
 func JobFromStringArray(arr []string) (*Job, error) {

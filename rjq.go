@@ -29,6 +29,8 @@ var ScriptNames = [...]string{
 	"ack",
 	"fail",
 	"test",
+	"maxfailed",
+	"maxjobs",
 	// "remove", // Can be accomplished with consume+ack
 }
 
@@ -124,7 +126,7 @@ func MakeKey(keys ...string) string {
 	return strings.Join(keys, SEP)
 }
 
-func (rjq *RJQ) Add(job *Job) error {
+func (rjq RJQ) Add(job *Job) error {
 	keys := []string{rjq.Namespace}
 	args := []string{fmt.Sprintf("%f", job.Priority), job.JobID}
 	args = append(args, job.ToStringArray()...)
@@ -151,7 +153,7 @@ namespace.
 Known error reply prefixes:
 	MAXJOBS_REACHED: The maximum number of simultaneous jobs has been reached.
 */
-func (rjq *RJQ) GetOne() (*Job, error) {
+func (rjq RJQ) GetOne() (*Job, error) {
 	// <ns>
 	keys := []string{rjq.Namespace}
 	// <client_name> <datetime> <job_id> <expires>
@@ -182,16 +184,16 @@ func (rjq *RJQ) GetOne() (*Job, error) {
 
 /* Get returns a Job object matching the specified jobid.
  */
-func (rjq *RJQ) Get(jobid string) (*Job, error) {
+func (rjq RJQ) Get(jobid string) (*Job, error) {
 	var job *Job
 	return job, nil
 }
 
-func (rjq *RJQ) Schedule(*Job, time.Time) error {
+func (rjq RJQ) Schedule(*Job, time.Time) error {
 	return nil
 }
 
-func (rjq *RJQ) Ack(job *Job) error {
+func (rjq RJQ) Ack(job *Job) error {
 	keys := []string{rjq.Namespace}
 	args := []string{job.JobID}
 	res := rjq.Scripts["ack"].EvalSha(rjq.Client, keys, args)
@@ -202,7 +204,7 @@ func (rjq *RJQ) Ack(job *Job) error {
 	return nil
 }
 
-func (rjq *RJQ) Fail(job *Job) error {
+func (rjq RJQ) Fail(job *Job) error {
 	keys := []string{rjq.Namespace}
 	args := []string{
 		job.JobID,
@@ -217,16 +219,60 @@ func (rjq *RJQ) Fail(job *Job) error {
 	return nil
 }
 
-func (rjq *RJQ) Jobs(int) ([]*Job, error) {
+func (rjq RJQ) Jobs(int) ([]*Job, error) {
 	var jobs []*Job
 	return jobs, nil
 }
 
-func (rjq *RJQ) Cancel(*Job) error {
+func (rjq RJQ) Cancel(*Job) error {
 	return nil
 }
 
-func (rjq *RJQ) Test() error {
+func (rjq RJQ) SetMaxFailed(n int) (int, error) {
+	keys := []string{rjq.Namespace}
+	args := []string{fmt.Sprintf("%d", n)}
+	val, err := rjq.Scripts["maxfailed"].EvalSha(rjq.Client, keys, args).Result()
+	if err != nil {
+		return 0, err
+	}
+	maxfailed, err := strconv.Atoi(val.(string))
+	return maxfailed, err
+}
+
+func (rjq RJQ) GetMaxFailed(n int) (int, error) {
+	keys := []string{rjq.Namespace}
+	args := []string{""}
+	val, err := rjq.Scripts["maxfailed"].EvalSha(rjq.Client, keys, args).Result()
+	if err != nil {
+		return 0, err
+	}
+	maxfailed, err := strconv.Atoi(val.(string))
+	return maxfailed, err
+}
+
+func (rjq RJQ) SetMaxJobs(n int) (int, error) {
+	keys := []string{rjq.Namespace}
+	args := []string{fmt.Sprintf("%d", n)}
+	val, err := rjq.Scripts["maxjobs"].EvalSha(rjq.Client, keys, args).Result()
+	if err != nil {
+		return 0, err
+	}
+	maxfailed, err := strconv.Atoi(val.(string))
+	return maxfailed, err
+}
+
+func (rjq RJQ) GetMaxJobs(n int) (int, error) {
+	keys := []string{rjq.Namespace}
+	args := []string{""}
+	val, err := rjq.Scripts["maxjobs"].EvalSha(rjq.Client, keys, args).Result()
+	if err != nil {
+		return 0, err
+	}
+	maxfailed, err := strconv.Atoi(val.(string))
+	return maxfailed, err
+}
+
+func (rjq RJQ) Test() error {
 	val, err := rjq.Scripts["test"].EvalSha(rjq.Client, []string{}, []string{}).Result()
 	// if strings.HasPrefix(err.Error(), "MAXJOBS") {
 	// 	fmt.Println("Found MAXJOBS Error")

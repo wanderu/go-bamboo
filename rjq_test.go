@@ -27,6 +27,42 @@ func TestTest(t *testing.T) {
 	rjq.Test()
 }
 
+func TestMaxFailed(t *testing.T) {
+	ns := "TEST"
+	conn, _ := MakeConn("localhost", 6379, "", 0)
+	rjq := MakeQueue(ns, conn)
+	kmaxfailed := MakeKey(ns, "MAXFAILED")
+	_ = rjq.Client.Del(kmaxfailed)
+	maxfailed := 5
+	n, err := rjq.SetMaxFailed(maxfailed)
+	if err != nil {
+		t.Error(err)
+	}
+	if n != maxfailed {
+		t.Error(fmt.Sprintf("%d != %d", n, maxfailed))
+	}
+	_ = rjq.Client.Del(kmaxfailed)
+}
+
+func TestMaxJobs(t *testing.T) {
+	ns := "TEST"
+	conn, _ := MakeConn("localhost", 6379, "", 0)
+	rjq := MakeQueue(ns, conn)
+	kmaxjobs := MakeKey(ns, "MAXJOBS")
+	_ = rjq.Client.Del(kmaxjobs)
+	maxjobs := 5
+	n, err := rjq.SetMaxFailed(maxjobs)
+	if err != nil {
+		t.Error(err)
+	}
+	if n != maxjobs {
+		t.Error(fmt.Sprintf("%d != %d", n, maxjobs))
+	}
+	_ = rjq.Client.Del(kmaxjobs)
+}
+
+// ComprareJobs compares a subset of job fields that should not change
+// over the lifetime of the job.
 func CompareJobs(a *Job, b *Job) bool {
 	return a.Priority == b.Priority &&
 		a.JobID == b.JobID &&
@@ -67,6 +103,8 @@ func TestAdd(t *testing.T) {
 
 	kqueued := MakeKey(rjq.Namespace, "QUEUED")
 	kworking := MakeKey(rjq.Namespace, "WORKING")
+	kscheduled := MakeKey(rjq.Namespace, "SCHEDULED")
+	kfailed := MakeKey(rjq.Namespace, "FAILED")
 	// fmt.Println("kqueued: ", kqueued)
 	// fmt.Println("kworking: ", kworking)
 	_ = rjq.Client.ZRem(kqueued, job1id)
@@ -138,4 +176,21 @@ func TestAdd(t *testing.T) {
 	if res > 0 {
 		t.Error("Job still in working queue.", job1id, "Score", res)
 	}
+
+	// Test fail case
+	err = rjq.Add(job)
+	if err != nil {
+		t.Error(err)
+	}
+	err = rjq.Fail(job)
+	job4, err := rjq.GetOne()
+	if err != nil {
+		fmt.Println(err)
+	}
+	fmt.Println(job4)
+	res, err = rjq.Client.ZScore(kscheduled, job1id).Result()
+	// should not be on the scheduled queue
+	res, err = rjq.Client.ZScore(kfailed, job1id).Result()
+	// should be on the failed queue
+
 }
