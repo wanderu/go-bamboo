@@ -31,6 +31,7 @@ var ScriptNames = [...]string{
 	"test",
 	"maxfailed",
 	"maxjobs",
+	"recover",
 	// "remove", // Can be accomplished with consume+ack
 }
 
@@ -217,6 +218,36 @@ func (rjq RJQ) Fail(job *Job) error {
 		return res.Err()
 	}
 	return nil
+}
+
+type NA struct{}
+
+var na = NA{}
+
+func SetToSlice(m *map[string]NA) (s []string) {
+	for k, _ := range *m {
+		s = append(s, k)
+	}
+	return s
+}
+
+func (rjq RJQ) Recover() ([]string, error) {
+	keys := []string{rjq.Namespace}
+	args := []string{""}
+	res := rjq.Scripts["recover"].EvalSha(rjq.Client, keys, args)
+	if res.Err() != nil {
+		return nil, res.Err()
+	}
+	vals := res.Val().([]interface{})
+	strs := make([]string, len(vals))
+	// Make a Set to only report unique job ids
+	// reg := make(map[string]NA)
+	for i, val := range vals {
+		// reg[val.(string)] = na
+		strs[i] = val.(string)
+	}
+	// return SetToSlice(&reg), res.Err()
+	return strs, res.Err()
 }
 
 func (rjq RJQ) Jobs(int) ([]*Job, error) {

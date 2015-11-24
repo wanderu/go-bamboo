@@ -25,6 +25,79 @@ func TestTest(t *testing.T) {
 	rjq := MakeQueue(ns, conn)
 	// fmt.Println(rjq)
 	rjq.Test()
+	// res, err := rjq.Recover()
+	// fmt.Println(res)
+	// fmt.Println(err)
+}
+
+func TestRecover(t *testing.T) {
+	ns := "TEST"
+	conn, _ := MakeConn("localhost", 6379, "", 0)
+	rjq := MakeQueue(ns, conn)
+
+	kqueued := MakeKey(rjq.Namespace, "QUEUED")
+	kworking := MakeKey(rjq.Namespace, "WORKING")
+	// kscheduled := MakeKey(rjq.Namespace, "SCHEDULED")
+	// kfailed := MakeKey(rjq.Namespace, "FAILED")
+
+	kworkers := MakeKey(rjq.Namespace, "WORKERS")
+	worker := "test-worker-id"
+	kworker := MakeKey(kworkers, worker)
+	// kworker_active := MakeKey(kworker, "ACTIVE")
+	job1id := "job1"
+
+	data := make(map[string]string)
+	data["a"] = "A"
+	data["b"] = "B"
+	payload, err := json.Marshal(data)
+	job := &Job{
+		JobID:       job1id,
+		Priority:    5,
+		Payload:     string(payload),
+		ContentType: "application/json",
+		Owner:       "",
+		DateAdded:   time.Now().UTC().Unix(),
+	}
+
+	job_key := MakeKey(rjq.Namespace, "JOBS", job1id)
+	// Make sure it doesn't exist yet before adding
+	_ = rjq.Client.Del(job_key)
+	_ = rjq.Client.ZRem(kqueued, job1id)
+	_ = rjq.Client.ZRem(kworking, job1id)
+
+	err = rjq.Add(job)
+	if err != nil {
+		t.Error(err)
+	}
+
+	rjq.Client.SAdd(kworkers, worker)
+	rjq.Client.SAdd(kworker, job1id)
+	// rjq.Client.Set(kworker_active, "1", 30)
+
+	res, err := rjq.Recover()
+	if len(res) != 1 && res[0] != job1id {
+		t.Error(fmt.Sprintf("Expected [%s], found: %v", job1id, res))
+	}
+	if err != nil {
+		t.Error(err)
+	}
+
+	// check if worker still in working set (should not be)
+	// res, err := rjq.Client.SGet(kworkers, kworker).Result()
+
+	job_arr, err := rjq.Client.HGetAll(job_key).Result()
+	if err != nil {
+		t.Error(err)
+	}
+
+	job2, err := JobFromStringArray(job_arr)
+	if err != nil {
+		t.Error(err)
+	}
+	if job2.Failures != 1 {
+		t.Error("Failure count incorrect: %d", job2.Failures)
+	}
+
 }
 
 func TestMaxFailed(t *testing.T) {
