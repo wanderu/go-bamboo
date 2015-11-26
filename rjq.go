@@ -21,18 +21,28 @@ import (
 	"time"
 )
 
+type QueueID string
+
+const (
+	QUEUED    QueueID = "QUEUED"
+	SCHEDULED QueueID = "SCHEDULED"
+	WORKING   QueueID = "WORKING"
+	FAILED    QueueID = "FAILED"
+)
+
 const MAX_RETRIES int = 3
 const SEP string = ":"
 
 var ScriptNames = [...]string{
-	"enqueue",
-	"consume",
 	"ack",
+	"cancel",
+	"consume",
+	"enqueue",
 	"fail",
-	"test",
 	"maxfailed",
 	"maxjobs",
 	"recover",
+	"test",
 	// "remove", // Can be accomplished with consume+ack
 }
 
@@ -146,7 +156,7 @@ func (rjq RJQ) Add(job *Job) error {
 	return nil
 }
 
-/* GetOne returns the next available Job object from the queue.
+/* Consume returns the next available Job object from the queue.
 
 Returns an error if arguments are invalid.
 Returns an expected error if the max number of jobs has been reached for the
@@ -155,13 +165,14 @@ namespace.
 Known error reply prefixes:
 	MAXJOBS_REACHED: The maximum number of simultaneous jobs has been reached.
 */
-func (rjq RJQ) GetOne() (*Job, error) {
+func (rjq RJQ) Consume() (*Job, error) {
 	// <ns>
 	keys := []string{rjq.Namespace}
 	// <client_name> <datetime> <job_id> <expires>
 	args := []string{
 		rjq.WorkerName,
 		"",
+		fmt.Sprintf("%d", time.Now().UTC().Unix()),
 		fmt.Sprintf("%d", rjq.JobExp)}
 
 	res := rjq.Scripts["consume"].EvalSha(rjq.Client, keys, args)
@@ -247,8 +258,16 @@ func (rjq RJQ) Recover() ([]string, error) {
 	return strs, res.Err()
 }
 
-func (rjq RJQ) Jobs(int) ([]*Job, error) {
-	var jobs []*Job
+// Peek returns the top n jobs from the queue.
+func (rjq RJQ) Peek(n int, queue QueueID) (jobs []*Job, err error) {
+	ids, err := rjq.Client.ZRange(string(queue), 0, int64(n)).Result()
+	for _, id := range ids {
+		job, err := rjq.Get(id)
+		if err != nil {
+			continue
+		}
+		jobs = append(jobs, job)
+	}
 	return jobs, nil
 }
 
