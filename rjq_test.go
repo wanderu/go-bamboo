@@ -20,14 +20,67 @@ func TestMakeKey(t *testing.T) {
 }
 
 func TestTest(t *testing.T) {
+	// fmt.Printf("%d\n", time.Now().UTC().Unix())
 	ns := "TEST"
 	conn, _ := MakeConn("localhost", 6379, "", 0)
 	rjq := MakeQueue(ns, conn)
 	// fmt.Println(rjq)
+	// fmt.Println("time.Now.UTC.Unix", time.Now().UTC().Unix())
 	rjq.Test()
 	// res, err := rjq.Recover()
 	// fmt.Println(res)
 	// fmt.Println(err)
+}
+
+func TestCancel(t *testing.T) {
+	ns := "TEST"
+	conn, _ := MakeConn("localhost", 6379, "", 0)
+	rjq := MakeQueue(ns, conn)
+
+	job1id := "job1"
+
+	data := make(map[string]string)
+	data["a"] = "A"
+	data["b"] = "B"
+	payload, err := json.Marshal(data)
+	job := &Job{
+		JobID:       job1id,
+		Priority:    5,
+		Payload:     string(payload),
+		ContentType: "application/json",
+		Owner:       "",
+		DateAdded:   time.Now().UTC().Unix(),
+	}
+
+	job_key := MakeKey(rjq.Namespace, "JOBS", job1id)
+
+	err = rjq.Add(job)
+	if err != nil {
+		t.Error(err)
+	}
+
+	// Test to make sure the Job data is there
+	job2, err := rjq.Get(job.JobID)
+	if err != nil {
+		t.Error(err)
+	}
+
+	kqueued := MakeKey(rjq.Namespace, "QUEUED")
+	score, err := rjq.Client.ZScore(kqueued, job1id).Result()
+	if err != nil {
+		t.Error(err)
+	}
+	if score != job.Priority {
+		t.Error(fmt.Sprintf("Priority not the same %d != %d", score, job.Priority))
+	}
+
+	rjq.Cancel(job)
+	if err != nil {
+		t.Error(err)
+	}
+
+	// Test to make sure the Job data is no longer there and not in a queue.
+
 }
 
 func TestRecover(t *testing.T) {
@@ -82,22 +135,20 @@ func TestRecover(t *testing.T) {
 		t.Error(err)
 	}
 
-	// check if worker still in working set (should not be)
-	// res, err := rjq.Client.SGet(kworkers, kworker).Result()
-
-	job_arr, err := rjq.Client.HGetAll(job_key).Result()
-	if err != nil {
-		t.Error(err)
+	for _, jobid := range res {
+		job2, err := rjq.Get(jobid)
+		if err != nil {
+			t.Error(err)
+		}
+		if job2.Failures != 1 {
+			t.Error("Failure count incorrect: %d", job2.Failures)
+		}
 	}
 
-	job2, err := JobFromStringArray(job_arr)
-	if err != nil {
-		t.Error(err)
-	}
-	if job2.Failures != 1 {
-		t.Error("Failure count incorrect: %d", job2.Failures)
-	}
-
+	// Clean up
+	_ = rjq.Client.Del(job_key)
+	_ = rjq.Client.ZRem(kqueued, job1id)
+	_ = rjq.Client.ZRem(kworking, job1id)
 }
 
 func TestMaxFailed(t *testing.T) {

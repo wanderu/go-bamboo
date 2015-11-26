@@ -12,6 +12,7 @@ package bamboo
 import (
 	"fmt"
 	"gopkg.in/redis.v3"
+	"math"
 	"math/rand"
 	"net/url"
 	"os"
@@ -160,7 +161,6 @@ func (rjq RJQ) GetOne() (*Job, error) {
 	// <client_name> <datetime> <job_id> <expires>
 	args := []string{
 		rjq.WorkerName,
-		fmt.Sprintf("%d", time.Now().UTC().Unix()),
 		"",
 		fmt.Sprintf("%d", rjq.JobExp)}
 
@@ -185,8 +185,13 @@ func (rjq RJQ) GetOne() (*Job, error) {
 
 /* Get returns a Job object matching the specified jobid.
  */
-func (rjq RJQ) Get(jobid string) (*Job, error) {
-	var job *Job
+func (rjq RJQ) Get(jobid string) (job *Job, err error) {
+	job_key := MakeKey(rjq.Namespace, "JOBS", jobid)
+	job_arr, err := rjq.Client.HGetAll(job_key).Result()
+	if err != nil {
+		return job, err
+	}
+	job, err = JobFromStringArray(job_arr)
 	return job, nil
 }
 
@@ -205,12 +210,16 @@ func (rjq RJQ) Ack(job *Job) error {
 	return nil
 }
 
-func (rjq RJQ) Fail(job *Job) error {
+func (rjq RJQ) Fail(job *Job, requeue_seconds int) error {
 	keys := []string{rjq.Namespace}
+	if requeue_seconds < 0 {
+		requeue_seconds = int(3600 * math.Pow(float64(job.Failures), 2))
+	}
 	args := []string{
 		job.JobID,
 		fmt.Sprintf("%d", time.Now().UTC().Unix()),
-		"", "",
+		// seconds till requeue
+		fmt.Sprintf("%f", requeue_seconds),
 	}
 	res := rjq.Scripts["fail"].EvalSha(rjq.Client, keys, args)
 	if res.Err() != nil {
@@ -220,33 +229,21 @@ func (rjq RJQ) Fail(job *Job) error {
 	return nil
 }
 
-type NA struct{}
-
-var na = NA{}
-
-func SetToSlice(m *map[string]NA) (s []string) {
-	for k, _ := range *m {
-		s = append(s, k)
-	}
-	return s
-}
-
 func (rjq RJQ) Recover() ([]string, error) {
 	keys := []string{rjq.Namespace}
-	args := []string{""}
+	args := []string{
+		fmt.Sprintf("%d", time.Now().UTC().Unix()),
+		"3600",
+	}
 	res := rjq.Scripts["recover"].EvalSha(rjq.Client, keys, args)
 	if res.Err() != nil {
 		return nil, res.Err()
 	}
 	vals := res.Val().([]interface{})
 	strs := make([]string, len(vals))
-	// Make a Set to only report unique job ids
-	// reg := make(map[string]NA)
 	for i, val := range vals {
-		// reg[val.(string)] = na
 		strs[i] = val.(string)
 	}
-	// return SetToSlice(&reg), res.Err()
 	return strs, res.Err()
 }
 
@@ -255,7 +252,13 @@ func (rjq RJQ) Jobs(int) ([]*Job, error) {
 	return jobs, nil
 }
 
-func (rjq RJQ) Cancel(*Job) error {
+func (rjq RJQ) Cancel(job *Job) error {
+	keys := []string{rjq.Namespace}
+	args := []string{job.JobID}
+	res := rjq.Scripts["cancel"].EvalSha(rjq.Client, keys, args)
+	if res.Err() != nil {
+		return res.Err()
+	}
 	return nil
 }
 
