@@ -24,10 +24,11 @@ import (
 type QueueID string
 
 const (
-	QUEUED    QueueID = "QUEUED"
-	SCHEDULED QueueID = "SCHEDULED"
-	WORKING   QueueID = "WORKING"
-	FAILED    QueueID = "FAILED"
+	QUEUED        QueueID = "QUEUED"
+	SCHEDULED     QueueID = "SCHEDULED"
+	WORKING       QueueID = "WORKING"
+	FAILED        QueueID = "FAILED"
+	QUEUED_NOTIFY QueueID = "QUEUED:NOTIFY"
 )
 
 const MAX_RETRIES int = 3
@@ -136,6 +137,23 @@ func MakeQueue(ns string, conn *redis.Client) (rjq *RJQ) {
 // IE. MakeKey("a", "b", "c") -> "a:b:c"
 func MakeKey(keys ...string) string {
 	return strings.Join(keys, SEP)
+}
+
+func (rjq RJQ) Subscribe(notify chan string) (string, error) {
+	pskey := MakeKey(rjq.Namespace, string(QUEUED_NOTIFY))
+	fmt.Println("RJQ Subscribing to", pskey)
+	pubsub, err := rjq.Client.Subscribe(pskey)
+	notify <- ""
+
+	// msg, err := pubsub.ReceiveTimeout(time.Duration(timeout) * time.Millisecond)
+	// if err != nil {
+	// 	return "", err
+	// }
+	msg, err := pubsub.ReceiveMessage()
+	if err != nil {
+		return "", err
+	}
+	return msg.Payload, nil
 }
 
 func (rjq RJQ) Add(job *Job) error {
@@ -327,12 +345,12 @@ func (rjq RJQ) GetMaxJobs(n int) (int, error) {
 }
 
 func (rjq RJQ) Test() error {
-	val, err := rjq.Scripts["test"].EvalSha(rjq.Client, []string{}, []string{}).Result()
-	// if strings.HasPrefix(err.Error(), "MAXJOBS") {
-	// 	fmt.Println("Found MAXJOBS Error")
-	// }
-	fmt.Println("Error", err)
-	fmt.Println("Result", val)
-	fmt.Printf("%#T\n", val)
+	fmt.Println("Test calling lua")
+	_, err := rjq.Scripts["test"].EvalSha(rjq.Client, []string{}, []string{}).Result()
+	if err != nil {
+		fmt.Println("RJQ.Test Error", err)
+	}
+	// fmt.Println("Result", val)
+	// fmt.Printf("%#T\n", val)
 	return err
 }

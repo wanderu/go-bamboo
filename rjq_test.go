@@ -67,6 +67,13 @@ func TestMakeKey(t *testing.T) {
 	}
 }
 
+func subscribeAndPrint(rjq *RJQ, notify chan string) {
+	msg, err := rjq.Subscribe(notify)
+	fmt.Println("PubSub msg:", msg)
+	fmt.Println("PubSub err:", err)
+	notify <- msg
+}
+
 func TestTest(t *testing.T) {
 	// fmt.Printf("%d\n", time.Now().UTC().Unix())
 	conn := makeConn()
@@ -75,7 +82,13 @@ func TestTest(t *testing.T) {
 	defer removeQueues(rjq)
 	// fmt.Println(rjq)
 	// fmt.Println("time.Now.UTC.Unix", time.Now().UTC().Unix())
-	// rjq.Test()
+
+	notify := make(chan string)
+	go subscribeAndPrint(rjq, notify)
+	<-notify
+	rjq.Test()
+	fmt.Println("Waiting for notify.")
+	fmt.Println("TestTest msg:", <-notify)
 
 	// _ = rjq.Client.ZAdd(string(QUEUED), redis.Z{1, "test1"})
 	// val, err := rjq.Client.ZRange(string(QUEUED), 0, int64(3)).Result()
