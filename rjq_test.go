@@ -25,6 +25,40 @@ func CompareJobs(a *Job, b *Job) bool {
 		a.Encoding == b.Encoding
 }
 
+func removeQueues(rjq *RJQ) {
+	kqueued := MakeKey(rjq.Namespace, "QUEUED")
+	kworking := MakeKey(rjq.Namespace, "WORKING")
+	kscheduled := MakeKey(rjq.Namespace, "SCHEDULED")
+	kfailed := MakeKey(rjq.Namespace, "FAILED")
+	kworkers := MakeKey(rjq.Namespace, "WORKERS")
+	kworker := MakeKey(kworkers, rjq.WorkerName)
+	kworker_active := MakeKey(kworker, "ACTIVE")
+	alljobs := MakeKey(rjq.Namespace, "JOBS", "*")
+	kmaxjobs := MakeKey(rjq.Namespace, "MAXJOBS")
+	kmaxfailed := MakeKey(rjq.Namespace, "MAXFAILED")
+
+	rjq.Client.Del(kqueued)
+	rjq.Client.Del(kworking)
+	rjq.Client.Del(kscheduled)
+	rjq.Client.Del(kfailed)
+	rjq.Client.Del(kworkers)
+	rjq.Client.Del(kworker)
+	rjq.Client.Del(kworker_active)
+	rjq.Client.Del(kmaxjobs)
+	rjq.Client.Del(kmaxfailed)
+
+	jobs, err := rjq.Client.Keys(alljobs).Result()
+	if err != nil {
+		fmt.Println(err)
+	}
+	rjq.Client.Del(jobs...)
+}
+
+func makeConn() *redis.Client {
+	conn, _ := MakeConn("localhost", 6379, "", 0)
+	return conn
+}
+
 func TestMakeKey(t *testing.T) {
 	key := MakeKey("a", "b", "c")
 	expected := "a:b:c"
@@ -35,18 +69,19 @@ func TestMakeKey(t *testing.T) {
 
 func TestTest(t *testing.T) {
 	// fmt.Printf("%d\n", time.Now().UTC().Unix())
-	conn, _ := MakeConn("localhost", 6379, "", 0)
-	defer conn.Close()
+	conn := makeConn()
 	rjq := MakeQueue(NS, conn)
+	defer conn.Close()
+	defer removeQueues(rjq)
 	// fmt.Println(rjq)
 	// fmt.Println("time.Now.UTC.Unix", time.Now().UTC().Unix())
 	// rjq.Test()
 
-	_ = rjq.Client.ZAdd(string(QUEUED), redis.Z{1, "test1"})
-	val, err := rjq.Client.ZRange(string(QUEUED), 0, int64(3)).Result()
-	fmt.Println(val)
-	fmt.Println(err)
-	_ = rjq.Client.ZRem(string(QUEUED), "test1")
+	// _ = rjq.Client.ZAdd(string(QUEUED), redis.Z{1, "test1"})
+	// val, err := rjq.Client.ZRange(string(QUEUED), 0, int64(3)).Result()
+	// fmt.Println(val)
+	// fmt.Println(err)
+	// _ = rjq.Client.ZRem(string(QUEUED), "test1")
 }
 
 func generateTestJobs(n int) (jobs []*Job) {
@@ -70,11 +105,37 @@ func generateTestJobs(n int) (jobs []*Job) {
 	return jobs
 }
 
-func TestPeek(t *testing.T) {
-	conn, _ := MakeConn("localhost", 6379, "", 0)
-	defer conn.Close()
+func jobExistsInZSet(rjq *RJQ, job *Job, khmap string) bool {
+	_, err := rjq.Client.ZScore(khmap, job.JobID).Result()
+	if err != nil {
+		return false
+	}
+	return true
+}
 
+func jobExistsInAnyZSet(rjq *RJQ, job *Job) bool {
+	for _, queue := range []string{"SCHEDULED", "WORKING", "QUEUED", "FAILED"} {
+		if jobExistsInZSet(rjq, job, MakeKey(rjq.Namespace, queue)) {
+			return true
+		}
+	}
+	return false
+}
+
+func printQueues(rjq *RJQ) {
+	for _, queue := range []string{"SCHEDULED", "WORKING", "QUEUED", "FAILED"} {
+		jobs, _ := rjq.Client.ZRange(MakeKey(rjq.Namespace, queue), 0, -1).Result()
+		fmt.Println(queue)
+		fmt.Println(jobs)
+	}
+}
+
+func TestPeek(t *testing.T) {
+	conn := makeConn()
 	rjq := MakeQueue(NS, conn)
+	defer conn.Close()
+	defer removeQueues(rjq)
+
 	// Add some items
 	jobs := generateTestJobs(3)
 	for _, job := range jobs {
@@ -99,15 +160,18 @@ func TestPeek(t *testing.T) {
 	}
 }
 
-func TestCancel(t *testing.T) {
-	conn, _ := MakeConn("localhost", 6379, "", 0)
-	defer conn.Close()
+func TestAddAndCancel(t *testing.T) {
+	conn := makeConn()
 	rjq := MakeQueue(NS, conn)
 
 	job := generateTestJobs(1)[0]
 
 	kqueued := MakeKey(rjq.Namespace, "QUEUED")
+	// kworking := MakeKey(rjq.Namespace, "WORKING")
 	job_key := MakeKey(rjq.Namespace, "JOBS", job.JobID)
+
+	defer conn.Close()
+	defer removeQueues(rjq)
 
 	err := rjq.Add(job)
 	if err != nil {
@@ -139,72 +203,166 @@ func TestCancel(t *testing.T) {
 		t.Fatal("Job data still exists: " + job_key)
 	}
 
-	_, err = rjq.Client.ZScore(kqueued, job.JobID).Result()
-	if err == nil {
+	if jobExistsInZSet(rjq, job, kqueued) {
 		t.Fatal("Job data still exists in queue: " + kqueued)
 	}
 }
 
-func TestRecover(t *testing.T) {
-	conn, _ := MakeConn("localhost", 6379, "", 0)
-	defer conn.Close()
+func TestAddConsumeCancel(t *testing.T) {
+	conn := makeConn()
 	rjq := MakeQueue(NS, conn)
+
+	job := generateTestJobs(1)[0]
 
 	kqueued := MakeKey(rjq.Namespace, "QUEUED")
 	kworking := MakeKey(rjq.Namespace, "WORKING")
-	// kscheduled := MakeKey(rjq.Namespace, "SCHEDULED")
-	// kfailed := MakeKey(rjq.Namespace, "FAILED")
+	// job_key := MakeKey(rjq.Namespace, "JOBS", job.JobID)
 
-	kworkers := MakeKey(rjq.Namespace, "WORKERS")
-	worker := "test-worker-id"
-	kworker := MakeKey(kworkers, worker)
-	// kworker_active := MakeKey(kworker, "ACTIVE")
-	job := generateTestJobs(1)[0]
-
-	job1id := job.JobID
-	job_key := MakeKey(rjq.Namespace, "JOBS", job1id)
-	// Make sure it doesn't exist yet before adding
-	_ = rjq.Client.Del(job_key)
-	_ = rjq.Client.ZRem(kqueued, job1id)
-	_ = rjq.Client.ZRem(kworking, job1id)
+	defer conn.Close()
+	defer removeQueues(rjq)
 
 	err := rjq.Add(job)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	rjq.Client.SAdd(kworkers, worker)
-	rjq.Client.SAdd(kworker, job1id)
-	// rjq.Client.Set(kworker_active, "1", 30)
+	job2, err := rjq.Consume()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if jobExistsInZSet(rjq, job, kqueued) {
+		t.Fatal("Job should not be in the QUEUED queue after consumption.")
+	}
+
+	if !jobExistsInZSet(rjq, job, kworking) {
+		t.Fatal("Job should be in the WORKING queue, but is not.")
+	}
+
+	err = rjq.Cancel(job2)
+	if err == nil {
+		t.Fatal("Job cancelled but the cancel operation should have been rejected.")
+	}
+}
+
+func TestAddConsumeFailCancel(t *testing.T) {
+	// Add, consume, fail to cancel, fail, cancel
+	conn := makeConn()
+	rjq := MakeQueue(NS, conn)
+	rjq.WorkerName = "worker"
+
+	job := generateTestJobs(1)[0]
+
+	// kscheduled := MakeKey(rjq.Namespace, "SCHEDULED")
+	kfailed := MakeKey(rjq.Namespace, "FAILED")
+	job_key := MakeKey(rjq.Namespace, "JOBS", job.JobID)
+
+	defer conn.Close()
+	defer removeQueues(rjq)
+
+	err := rjq.Add(job)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	job2, err := rjq.Consume()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = rjq.Fail(job2, 3600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Make sure it's on the FAILED queue.
+	if !jobExistsInZSet(rjq, job2, kfailed) {
+		printQueues(rjq)
+		t.Fatal("Job should be in the FAILED queue after fail.")
+	}
+
+	err = rjq.Cancel(job2)
+	if err != nil {
+		printQueues(rjq)
+		t.Fatal(err)
+	}
+
+	if jobExistsInAnyZSet(rjq, job2) {
+		printQueues(rjq)
+		t.Fatal("Cancel failed. Job still exists")
+	}
+
+	// Make sure the job data doesn't exist.
+	exists, err := rjq.Client.Exists(job_key).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exists == true {
+		t.Fatal("Job object still exists: %s", job_key)
+	}
+}
+
+func TestRecover(t *testing.T) {
+	conn := makeConn()
+	rjq := MakeQueue(NS, conn)
+	removeQueues(rjq)
+
+	job := generateTestJobs(1)[0]
+	job_key := MakeKey(rjq.Namespace, "JOBS", job.JobID)
+
+	kworkers := MakeKey(rjq.Namespace, "WORKERS")
+	kworker := MakeKey(kworkers, rjq.WorkerName)
+	kworker_active := MakeKey(kworker, "ACTIVE")
+
+	// Clean up
+	defer conn.Close()
+	defer removeQueues(rjq)
+	defer rjq.Client.Del(job_key)
+
+	// Make sure it doesn't exist yet before adding
+	_ = rjq.Client.Del(job_key)
+
+	err := rjq.Add(job)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	job2, err := rjq.Consume()
+	if err != nil {
+		fmt.Println(job2)
+		t.Fatal("Consume failed.")
+	}
+	// Remove the active flag (Simulate worker expiration).
+	rjq.Client.Del(kworker_active)
 
 	res, err := rjq.Recover()
-	if len(res) != 1 || res[0] != job1id {
-		t.Fatal(fmt.Sprintf("Expected [%s], found: %v", job1id, res))
+	if len(res) != 1 || res[0] != job.JobID {
+		t.Fatal(fmt.Sprintf("Expected [%s], found: %v", job.JobID, res))
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	for _, jobid := range res {
-		job2, err := rjq.Get(jobid)
+		job3, err := rjq.Get(jobid)
 		if err != nil {
+			printQueues(rjq)
 			t.Fatal(err)
 		}
-		if job2.Failures != 1 {
-			t.Fatal("Failure count incorrect: %d", job2.Failures)
+		if job3.Failures != 1 {
+			printQueues(rjq)
+			fmt.Println(job3)
+			t.Fatal("Failure count incorrect:", job3.Failures)
 		}
 	}
 
-	// Clean up
-	_ = rjq.Client.Del(job_key)
-	_ = rjq.Client.ZRem(kqueued, job1id)
-	_ = rjq.Client.ZRem(kworking, job1id)
 }
 
 func TestMaxFailed(t *testing.T) {
-	conn, _ := MakeConn("localhost", 6379, "", 0)
-	defer conn.Close()
+	conn := makeConn()
 	rjq := MakeQueue(NS, conn)
+	defer conn.Close()
+	defer removeQueues(rjq)
 
 	kmaxfailed := MakeKey(NS, "MAXFAILED")
 	_ = rjq.Client.Del(kmaxfailed)
@@ -220,9 +378,10 @@ func TestMaxFailed(t *testing.T) {
 }
 
 func TestMaxJobs(t *testing.T) {
-	conn, _ := MakeConn("localhost", 6379, "", 0)
-	defer conn.Close()
+	conn := makeConn()
 	rjq := MakeQueue(NS, conn)
+	defer conn.Close()
+	defer removeQueues(rjq)
 	kmaxjobs := MakeKey(NS, "MAXJOBS")
 	_ = rjq.Client.Del(kmaxjobs)
 	maxjobs := 5
@@ -238,9 +397,10 @@ func TestMaxJobs(t *testing.T) {
 
 func TestAdd(t *testing.T) {
 	// 1. Establish Connection
-	conn, err := MakeConn("localhost", 6379, "", 0)
-	defer conn.Close()
+	conn := makeConn()
 	rjq := MakeQueue(NS, conn)
+	defer conn.Close()
+	defer removeQueues(rjq)
 
 	// 2. Make and add Job
 	job := generateTestJobs(1)[0]
@@ -259,7 +419,7 @@ func TestAdd(t *testing.T) {
 	_ = rjq.Client.ZRem(kqueued, job.JobID)
 	_ = rjq.Client.ZRem(kworking, job.JobID)
 
-	err = rjq.Add(job)
+	err := rjq.Add(job)
 	if err != nil {
 		t.Fatal(err)
 	}

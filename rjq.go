@@ -230,7 +230,7 @@ func (rjq RJQ) Fail(job *Job, requeue_seconds int) error {
 		job.JobID,
 		fmt.Sprintf("%d", time.Now().UTC().Unix()),
 		// seconds till requeue
-		fmt.Sprintf("%f", requeue_seconds),
+		fmt.Sprintf("%d", requeue_seconds),
 	}
 	res := rjq.Scripts["fail"].EvalSha(rjq.Client, keys, args)
 	if res.Err() != nil {
@@ -271,14 +271,15 @@ func (rjq RJQ) Peek(n int, queue QueueID) (jobs []*Job, err error) {
 	return jobs, nil
 }
 
-func (rjq RJQ) Cancel(job *Job) error {
+func (rjq RJQ) CancelById(jobid string) error {
 	keys := []string{rjq.Namespace}
-	args := []string{job.JobID}
-	res := rjq.Scripts["cancel"].EvalSha(rjq.Client, keys, args)
-	if res.Err() != nil {
-		return res.Err()
-	}
-	return nil
+	args := []string{jobid}
+	_, err := rjq.Scripts["cancel"].EvalSha(rjq.Client, keys, args).Result()
+	return err
+}
+
+func (rjq RJQ) Cancel(job *Job) error {
+	return rjq.CancelById(job.JobID)
 }
 
 func (rjq RJQ) SetMaxFailed(n int) (int, error) {
