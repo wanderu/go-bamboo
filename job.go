@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"reflect"
 	"strconv"
 	"strings"
 )
@@ -32,20 +33,27 @@ func i64tos(i int64) string {
 // Volatile paramters change over the life time of the Job.
 type Job struct {
 	// Required - Set by user
-	Priority float64 // Used by priority queues for ordering.
-	JobID    string  // Unique per queue instance.
-	Payload  string  // Byte string.
+	ID       string  `bamboo:"id"`       // Unique per queue instance.
+	Priority float64 `bamboo:"priority"` // Used by priority queues for ordering.
+	Payload  string  `bamboo:"payload"`  // Byte string.
 	// Set by queuing system
-	Failures   int    // Number of failures so far. (Volatile)
-	DateAdded  int64  // Unix Timestamp of the job creation date.
-	DateFailed int64  // Unix Timestamp of the last failure. (Volatile)
-	Consumed   int64  // Unix Timestamp of the date this job was consumed. (Volatile)
-	Owner      string // Name of the worker process. (Volatile)
+	DateAdded  int64  `bamboo:"created"`  // Unix Timestamp of the job creation date.
+	Failures   int    `bamboo:"failures"` // Number of failures so far. (Volatile)
+	DateFailed int64  `bamboo:"failed"`   // Unix Timestamp of the last failure. (Volatile)
+	Consumed   int64  `bamboo:"consumed"` // Unix Timestamp of the date this job was consumed. (Volatile)
+	Owner      string `bamboo:"owner"`    // Name of the worker process. (Volatile)
 	// Not required - Set by user
-	ContentType string // ContentType of the payload IE. 'application/json'.
-	Encoding    string // Encoding of the payload.
-	State       string // Job state. "enqueued", "working", "failed". (Volatile)
+	ContentType string `bamboo:"contenttype"` // ContentType of the payload IE. 'application/json'.
+	Encoding    string `bamboo:"encoding"`    // Encoding of the payload.
+	State       string `bamboo:"state"`       // Job state. "enqueued", "working", "failed". (Volatile)
 }
+
+// func JobFromStringArrayTags(arr []string) (*Job, error) {
+// 	job := &Job{}
+// 	var err interface{}
+
+// 	field, ok := Job.FieldByName()
+// }
 
 func JobFromStringArray(arr []string) (*Job, error) {
 	job := &Job{}
@@ -60,8 +68,8 @@ func JobFromStringArray(arr []string) (*Job, error) {
 			if err != nil {
 				return nil, errors.New("Could not convert priority to int.")
 			}
-		case "jobid":
-			job.JobID = val
+		case "id":
+			job.ID = val
 		case "payload":
 			job.Payload = val
 		case "failures":
@@ -100,9 +108,35 @@ func JobFromStringArray(arr []string) (*Job, error) {
 }
 
 func (job *Job) ToStringArray() []string {
+	jtyp := reflect.TypeOf((*job)) // deref ptr
+	jval := reflect.ValueOf((*job))
+	res := make([]string, int(jval.NumField())*2)
+	for i := 0; i < jval.NumField(); i++ {
+		field := jtyp.Field(i)
+		tag := field.Tag.Get("bamboo")
+		var val string
+		switch field.Type.Kind() {
+		case reflect.Float64:
+			val = f64tos(jval.Field(i).Float())
+		case reflect.Int:
+			val = i64tos(jval.Field(i).Int())
+		case reflect.Int64:
+			val = i64tos(jval.Field(i).Int())
+		case reflect.String:
+			val = jval.Field(i).String()
+		default:
+			panic("Invalid type")
+		}
+		res[i*2] = tag
+		res[(i*2)+1] = val
+	}
+	return res
+}
+
+func (job *Job) ToStringArrayManual() []string {
 	return []string{
 		"priority", f64tos(job.Priority),
-		"jobid", job.JobID,
+		"id", job.ID,
 		"payload", job.Payload,
 		"failures", itos(job.Failures),
 		"dateadded", i64tos(job.DateAdded),

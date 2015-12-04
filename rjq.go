@@ -47,6 +47,11 @@ var ScriptNames = [...]string{
 	// "remove", // Can be accomplished with consume+ack
 }
 
+type PSMsg struct {
+	Msg string
+	Err error
+}
+
 // Example Usage
 // 	url := "redis://localhost:6379/0"
 // 	conn := bamboo.MakeConnFromUrl(url)
@@ -139,26 +144,34 @@ func MakeKey(keys ...string) string {
 	return strings.Join(keys, SEP)
 }
 
-func (rjq RJQ) Subscribe(notify chan string) (string, error) {
+func (rjq RJQ) Subscribe() (chan PSMsg, error) {
+	notify := make(chan PSMsg)
 	pskey := MakeKey(rjq.Namespace, string(QUEUED_NOTIFY))
-	fmt.Println("RJQ Subscribing to", pskey)
 	pubsub, err := rjq.Client.Subscribe(pskey)
-	notify <- ""
-
-	// msg, err := pubsub.ReceiveTimeout(time.Duration(timeout) * time.Millisecond)
-	// if err != nil {
-	// 	return "", err
-	// }
-	msg, err := pubsub.ReceiveMessage()
 	if err != nil {
-		return "", err
+		return notify, err
 	}
-	return msg.Payload, nil
+
+	// Receive messages infinitely
+	go func() {
+		defer fmt.Println("anon func closed")
+		defer pubsub.Close() // TODO: Determine if we need to close the PubSub conn
+		for {
+			msg, err := pubsub.ReceiveMessage()
+			if err != nil {
+				close(notify) // The sender closes
+				return
+			}
+			notify <- PSMsg{msg.Payload, nil}
+		}
+	}()
+
+	return notify, nil
 }
 
 func (rjq RJQ) Add(job *Job) error {
 	keys := []string{rjq.Namespace}
-	args := []string{fmt.Sprintf("%f", job.Priority), job.JobID}
+	args := []string{fmt.Sprintf("%f", job.Priority), job.ID}
 	args = append(args, job.ToStringArray()...)
 	val, err := rjq.Scripts["enqueue"].EvalSha(rjq.Client, keys, args).Result()
 	if err != nil {
@@ -230,7 +243,7 @@ func (rjq RJQ) Schedule(*Job, time.Time) error {
 
 func (rjq RJQ) Ack(job *Job) error {
 	keys := []string{rjq.Namespace}
-	args := []string{job.JobID}
+	args := []string{job.ID}
 	res := rjq.Scripts["ack"].EvalSha(rjq.Client, keys, args)
 	if res.Err() != nil {
 		// UNKNOWN_JOB_ID
@@ -245,7 +258,7 @@ func (rjq RJQ) Fail(job *Job, requeue_seconds int) error {
 		requeue_seconds = int(3600 * math.Pow(float64(job.Failures), 2))
 	}
 	args := []string{
-		job.JobID,
+		job.ID,
 		fmt.Sprintf("%d", time.Now().UTC().Unix()),
 		// seconds till requeue
 		fmt.Sprintf("%d", requeue_seconds),
@@ -297,7 +310,7 @@ func (rjq RJQ) CancelById(jobid string) error {
 }
 
 func (rjq RJQ) Cancel(job *Job) error {
-	return rjq.CancelById(job.JobID)
+	return rjq.CancelById(job.ID)
 }
 
 func (rjq RJQ) SetMaxFailed(n int) (int, error) {
@@ -345,12 +358,13 @@ func (rjq RJQ) GetMaxJobs(n int) (int, error) {
 }
 
 func (rjq RJQ) Test() error {
-	fmt.Println("Test calling lua")
-	_, err := rjq.Scripts["test"].EvalSha(rjq.Client, []string{}, []string{}).Result()
+	fmt.Println("RJQ.Test calling lua test script")
+	val, err := rjq.Scripts["test"].EvalSha(rjq.Client, []string{}, []string{}).Result()
 	if err != nil {
-		fmt.Println("RJQ.Test Error", err)
+		fmt.Println("RJQ.Test lua script error", err)
+	} else {
+		fmt.Println("RJQ.Test lua script result", val)
+		// fmt.Printf("%#T\n", val)
 	}
-	// fmt.Println("Result", val)
-	// fmt.Printf("%#T\n", val)
 	return err
 }

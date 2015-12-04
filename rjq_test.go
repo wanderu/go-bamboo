@@ -4,10 +4,10 @@
 package bamboo
 
 import (
-	"encoding/json"
 	"fmt"
 	// "reflect"
 	"gopkg.in/redis.v3"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -18,7 +18,7 @@ const NS = "TEST"
 // over the lifetime of the job.
 func CompareJobs(a *Job, b *Job) bool {
 	return a.Priority == b.Priority &&
-		a.JobID == b.JobID &&
+		a.ID == b.ID &&
 		a.Payload == b.Payload &&
 		a.DateAdded == b.DateAdded &&
 		a.ContentType == b.ContentType &&
@@ -37,15 +37,8 @@ func removeQueues(rjq *RJQ) {
 	kmaxjobs := MakeKey(rjq.Namespace, "MAXJOBS")
 	kmaxfailed := MakeKey(rjq.Namespace, "MAXFAILED")
 
-	rjq.Client.Del(kqueued)
-	rjq.Client.Del(kworking)
-	rjq.Client.Del(kscheduled)
-	rjq.Client.Del(kfailed)
-	rjq.Client.Del(kworkers)
-	rjq.Client.Del(kworker)
-	rjq.Client.Del(kworker_active)
-	rjq.Client.Del(kmaxjobs)
-	rjq.Client.Del(kmaxfailed)
+	rjq.Client.Del(kqueued, kworking, kscheduled, kfailed, kworkers, kworker,
+		kworker_active, kmaxjobs, kmaxfailed)
 
 	jobs, err := rjq.Client.Keys(alljobs).Result()
 	if err != nil {
@@ -67,59 +60,44 @@ func TestMakeKey(t *testing.T) {
 	}
 }
 
-func subscribeAndPrint(rjq *RJQ, notify chan string) {
-	msg, err := rjq.Subscribe(notify)
-	fmt.Println("PubSub msg:", msg)
-	fmt.Println("PubSub err:", err)
-	notify <- msg
+func pubsubTest(rjq *RJQ, t *testing.T) {
+	fmt.Println("Subscribing")
+	notify, err := rjq.Subscribe()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 4; i++ {
+		select {
+		case msg, ok := <-notify:
+			if !ok {
+				t.Fatal("notify !ok")
+			}
+			fmt.Println("TestTest Msg:", msg)
+		case <-time.After(time.Duration(1) * time.Second):
+			fmt.Println("Timeout")
+		}
+
+		if i == 1 {
+			rjq.Test()
+		}
+	}
 }
 
 func TestTest(t *testing.T) {
-	// fmt.Printf("%d\n", time.Now().UTC().Unix())
 	conn := makeConn()
 	rjq := MakeQueue(NS, conn)
 	defer conn.Close()
 	defer removeQueues(rjq)
-	// fmt.Println(rjq)
-	// fmt.Println("time.Now.UTC.Unix", time.Now().UTC().Unix())
-
-	notify := make(chan string)
-	go subscribeAndPrint(rjq, notify)
-	<-notify
-	rjq.Test()
-	fmt.Println("Waiting for notify.")
-	fmt.Println("TestTest msg:", <-notify)
-
-	// _ = rjq.Client.ZAdd(string(QUEUED), redis.Z{1, "test1"})
-	// val, err := rjq.Client.ZRange(string(QUEUED), 0, int64(3)).Result()
-	// fmt.Println(val)
-	// fmt.Println(err)
-	// _ = rjq.Client.ZRem(string(QUEUED), "test1")
-}
-
-func generateTestJobs(n int) (jobs []*Job) {
-	for i := 0; i < n; i++ {
-		jobid := fmt.Sprintf("job%d", i)
-		data := make(map[string]string)
-		data["a"] = "A"
-		data["b"] = "B"
-		payload, _ := json.Marshal(data)
-		job := &Job{
-			JobID:       jobid,
-			Priority:    5,
-			Payload:     string(payload),
-			ContentType: "application/json",
-			Owner:       "",
-			DateAdded:   time.Now().UTC().Unix(),
-		}
-
-		jobs = append(jobs, job)
+	for i := 0; i < 10; i++ {
+		pubsubTest(rjq, t)
+		fmt.Println("goroutines", runtime.NumGoroutine())
 	}
-	return jobs
+	time.Sleep(time.Duration(5) * time.Second)
 }
 
 func jobExistsInZSet(rjq *RJQ, job *Job, khmap string) bool {
-	_, err := rjq.Client.ZScore(khmap, job.JobID).Result()
+	_, err := rjq.Client.ZScore(khmap, job.ID).Result()
 	if err != nil {
 		return false
 	}
@@ -150,7 +128,7 @@ func TestPeek(t *testing.T) {
 	defer removeQueues(rjq)
 
 	// Add some items
-	jobs := generateTestJobs(3)
+	jobs := GenerateTestJobs(3)
 	for _, job := range jobs {
 		rjq.Add(job)
 	}
@@ -177,11 +155,11 @@ func TestAddAndCancel(t *testing.T) {
 	conn := makeConn()
 	rjq := MakeQueue(NS, conn)
 
-	job := generateTestJobs(1)[0]
+	job := GenerateTestJobs(1)[0]
 
 	kqueued := MakeKey(rjq.Namespace, "QUEUED")
 	// kworking := MakeKey(rjq.Namespace, "WORKING")
-	job_key := MakeKey(rjq.Namespace, "JOBS", job.JobID)
+	job_key := MakeKey(rjq.Namespace, "JOBS", job.ID)
 
 	defer conn.Close()
 	defer removeQueues(rjq)
@@ -192,12 +170,12 @@ func TestAddAndCancel(t *testing.T) {
 	}
 
 	// Test to make sure the Job data is there
-	_, err = rjq.Get(job.JobID)
+	_, err = rjq.Get(job.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	score, err := rjq.Client.ZScore(kqueued, job.JobID).Result()
+	score, err := rjq.Client.ZScore(kqueued, job.ID).Result()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,11 +203,11 @@ func TestAddConsumeCancel(t *testing.T) {
 	conn := makeConn()
 	rjq := MakeQueue(NS, conn)
 
-	job := generateTestJobs(1)[0]
+	job := GenerateTestJobs(1)[0]
 
 	kqueued := MakeKey(rjq.Namespace, "QUEUED")
 	kworking := MakeKey(rjq.Namespace, "WORKING")
-	// job_key := MakeKey(rjq.Namespace, "JOBS", job.JobID)
+	// job_key := MakeKey(rjq.Namespace, "JOBS", job.ID)
 
 	defer conn.Close()
 	defer removeQueues(rjq)
@@ -264,11 +242,11 @@ func TestAddConsumeFailCancel(t *testing.T) {
 	rjq := MakeQueue(NS, conn)
 	rjq.WorkerName = "worker"
 
-	job := generateTestJobs(1)[0]
+	job := GenerateTestJobs(1)[0]
 
 	// kscheduled := MakeKey(rjq.Namespace, "SCHEDULED")
 	kfailed := MakeKey(rjq.Namespace, "FAILED")
-	job_key := MakeKey(rjq.Namespace, "JOBS", job.JobID)
+	job_key := MakeKey(rjq.Namespace, "JOBS", job.ID)
 
 	defer conn.Close()
 	defer removeQueues(rjq)
@@ -320,8 +298,8 @@ func TestRecover(t *testing.T) {
 	rjq := MakeQueue(NS, conn)
 	removeQueues(rjq)
 
-	job := generateTestJobs(1)[0]
-	job_key := MakeKey(rjq.Namespace, "JOBS", job.JobID)
+	job := GenerateTestJobs(1)[0]
+	job_key := MakeKey(rjq.Namespace, "JOBS", job.ID)
 
 	kworkers := MakeKey(rjq.Namespace, "WORKERS")
 	kworker := MakeKey(kworkers, rjq.WorkerName)
@@ -349,8 +327,8 @@ func TestRecover(t *testing.T) {
 	rjq.Client.Del(kworker_active)
 
 	res, err := rjq.Recover()
-	if len(res) != 1 || res[0] != job.JobID {
-		t.Fatal(fmt.Sprintf("Expected [%s], found: %v", job.JobID, res))
+	if len(res) != 1 || res[0] != job.ID {
+		t.Fatal(fmt.Sprintf("Expected [%s], found: %v", job.ID, res))
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -416,9 +394,9 @@ func TestAdd(t *testing.T) {
 	defer removeQueues(rjq)
 
 	// 2. Make and add Job
-	job := generateTestJobs(1)[0]
+	job := GenerateTestJobs(1)[0]
 
-	job_key := MakeKey(rjq.Namespace, "JOBS", job.JobID)
+	job_key := MakeKey(rjq.Namespace, "JOBS", job.ID)
 
 	// Make sure it doesn't exist yet before adding
 	_ = rjq.Client.Del(job_key)
@@ -429,8 +407,8 @@ func TestAdd(t *testing.T) {
 	kfailed := MakeKey(rjq.Namespace, "FAILED")
 	// fmt.Println("kqueued: ", kqueued)
 	// fmt.Println("kworking: ", kworking)
-	_ = rjq.Client.ZRem(kqueued, job.JobID)
-	_ = rjq.Client.ZRem(kworking, job.JobID)
+	_ = rjq.Client.ZRem(kqueued, job.ID)
+	_ = rjq.Client.ZRem(kworking, job.ID)
 
 	err := rjq.Add(job)
 	if err != nil {
@@ -448,11 +426,6 @@ func TestAdd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if job2.State != "enqueued" {
-		t.Fatal("State is not enqueued. State: ", job2.State)
-	}
-	// fmt.Println(job)
-	// fmt.Println(job2)
 
 	if !CompareJobs(job, job2) {
 		t.Fatal("Job data doesn't match.")
@@ -476,7 +449,7 @@ func TestAdd(t *testing.T) {
 	}
 
 	// 6. Test that the Job is on the right queue
-	res, err := rjq.Client.ZScore(kworking, job.JobID).Result()
+	res, err := rjq.Client.ZScore(kworking, job.ID).Result()
 	// fmt.Println("Job score", res)
 
 	if res != job.Priority {
@@ -490,13 +463,13 @@ func TestAdd(t *testing.T) {
 	}
 
 	// 8. Test that the Job does not exist on any queue
-	res, err = rjq.Client.ZScore(kqueued, job.JobID).Result()
+	res, err = rjq.Client.ZScore(kqueued, job.ID).Result()
 	if res > 0 {
-		t.Fatal("Job still in queue.", job.JobID, "Score", res)
+		t.Fatal("Job still in queue.", job.ID, "Score", res)
 	}
-	res, err = rjq.Client.ZScore(kworking, job.JobID).Result()
+	res, err = rjq.Client.ZScore(kworking, job.ID).Result()
 	if res > 0 {
-		t.Fatal("Job still in working queue.", job.JobID, "Score", res)
+		t.Fatal("Job still in working queue.", job.ID, "Score", res)
 	}
 
 	// Test fail case
@@ -510,8 +483,8 @@ func TestAdd(t *testing.T) {
 		fmt.Println(err)
 	}
 	fmt.Println(job4)
-	res, err = rjq.Client.ZScore(kscheduled, job.JobID).Result()
+	res, err = rjq.Client.ZScore(kscheduled, job.ID).Result()
 	// should not be on the scheduled queue
-	res, err = rjq.Client.ZScore(kfailed, job.JobID).Result()
+	res, err = rjq.Client.ZScore(kfailed, job.ID).Result()
 	// should be on the failed queue
 }
