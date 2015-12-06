@@ -17,18 +17,6 @@ const (
 	MDY = "01/02/2006"
 )
 
-func itos(i int) string {
-	return fmt.Sprintf("%d", i)
-}
-
-func f64tos(f float64) string {
-	return fmt.Sprintf("%f", f)
-}
-
-func i64tos(i int64) string {
-	return fmt.Sprintf("%d", i)
-}
-
 // Job is an object representing the item stored in the queue.
 // Volatile paramters change over the life time of the Job.
 type Job struct {
@@ -48,68 +36,53 @@ type Job struct {
 	State       string `bamboo:"state"`       // Job state. "enqueued", "working", "failed". (Volatile)
 }
 
-// func JobFromStringArrayTags(arr []string) (*Job, error) {
-// 	job := &Job{}
-// 	var err interface{}
-
-// 	field, ok := Job.FieldByName()
-// }
-
 func JobFromStringArray(arr []string) (*Job, error) {
+	if len(arr)%2 == 1 {
+		return nil, errors.New("Invalid number of key/value pairs in Job string array.")
+	}
+
 	job := &Job{}
-	var err interface{}
+	jtyp := reflect.TypeOf(*job) // deref ptr to get actual struct
+	jval := reflect.ValueOf(job)
+
+	// create a map from tag to field
+	tagFieldMap := make(map[string]reflect.Value)
+	for i := 0; i < jval.Elem().NumField(); i++ {
+		tagFieldMap[jtyp.Field(i).Tag.Get("bamboo")] = jval.Elem().Field(i)
+	}
+
 	for i := 0; i < len(arr); i++ {
 		key := strings.ToLower(arr[i]) // key is compared lowercase
 		i++
 		val := arr[i]
-		switch key {
-		case "priority":
-			job.Priority, err = strconv.ParseFloat(val, 64)
+
+		// get field for tag
+		field := tagFieldMap[key]
+
+		switch field.Kind() {
+		case reflect.Float64:
+			valk, err := strconv.ParseFloat(val, 64)
 			if err != nil {
-				return nil, errors.New("Could not convert priority to int.")
+				return nil, errors.New(fmt.Sprintf("Could not convert field %s to float.", key))
 			}
-		case "id":
-			job.ID = val
-		case "payload":
-			job.Payload = val
-		case "failures":
-			job.Failures, err = strconv.Atoi(val)
+			field.SetFloat(valk)
+		case reflect.Int, reflect.Int32, reflect.Int64:
+			valk, err := strconv.ParseInt(val, 10, 64)
 			if err != nil {
-				return nil, errors.New("Cound not convert failures to int.")
+				return nil, errors.New(fmt.Sprintf("Could not convert field %s to int.", key))
 			}
-		case "dateadded":
-			job.DateAdded, err = strconv.ParseInt(val, 10, 64)
-			if err != nil {
-				return nil, errors.New("Cound not convert dateadded to int.")
-			}
-		case "datefailed":
-			job.DateFailed, err = strconv.ParseInt(val, 10, 64)
-			if err != nil {
-				return nil, errors.New("Cound not convert datefailed to int.")
-			}
-		case "consumed":
-			job.Consumed, err = strconv.ParseInt(val, 10, 64)
-			if err != nil {
-				return nil, errors.New("Cound not convert consumed to int.")
-			}
-		case "owner":
-			job.Owner = val
-		case "contenttype":
-			job.ContentType = val
-		case "encoding":
-			job.Encoding = val
-		case "state":
-			job.State = val
-		default:
-			return nil, errors.New(fmt.Sprintf("Invalid key: %s", key))
+			field.SetInt(valk)
+		case reflect.String:
+			field.SetString(val)
 		}
 	}
+
 	return job, nil
 }
 
 func (job *Job) ToStringArray() []string {
-	jtyp := reflect.TypeOf((*job)) // deref ptr
-	jval := reflect.ValueOf((*job))
+	jtyp := reflect.TypeOf(*job) // deref ptr to get actual struct
+	jval := reflect.ValueOf(*job)
 	res := make([]string, int(jval.NumField())*2)
 	for i := 0; i < jval.NumField(); i++ {
 		field := jtyp.Field(i)
@@ -117,11 +90,9 @@ func (job *Job) ToStringArray() []string {
 		var val string
 		switch field.Type.Kind() {
 		case reflect.Float64:
-			val = f64tos(jval.Field(i).Float())
-		case reflect.Int:
-			val = i64tos(jval.Field(i).Int())
-		case reflect.Int64:
-			val = i64tos(jval.Field(i).Int())
+			val = fmt.Sprintf("%f", jval.Field(i).Float())
+		case reflect.Int, reflect.Int64:
+			val = fmt.Sprintf("%d", jval.Field(i).Int())
 		case reflect.String:
 			val = jval.Field(i).String()
 		default:
@@ -131,22 +102,6 @@ func (job *Job) ToStringArray() []string {
 		res[(i*2)+1] = val
 	}
 	return res
-}
-
-func (job *Job) ToStringArrayManual() []string {
-	return []string{
-		"priority", f64tos(job.Priority),
-		"id", job.ID,
-		"payload", job.Payload,
-		"failures", itos(job.Failures),
-		"dateadded", i64tos(job.DateAdded),
-		"datefailed", i64tos(job.DateFailed),
-		"consumed", i64tos(job.Consumed),
-		"owner", job.Owner,
-		"contenttype", job.ContentType,
-		"encoding", job.Encoding,
-		"state", job.State,
-	}
 }
 
 // MakeJobID generates a random Job ID.

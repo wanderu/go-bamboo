@@ -289,17 +289,42 @@ func (rjq RJQ) Recover() ([]string, error) {
 	return strs, res.Err()
 }
 
-// Peek returns the top n jobs from the queue.
-func (rjq RJQ) Peek(n int, queue QueueID) (jobs []*Job, err error) {
-	ids, err := rjq.Client.ZRange(string(queue), 0, int64(n)).Result()
-	for _, id := range ids {
-		job, err := rjq.Get(id)
-		if err != nil {
-			continue
+type JobResult struct {
+	Job   *Job
+	Error error
+}
+
+// Peek returns a channel Job objects.
+//   queue: Queue from which to list Jobs.
+func (rjq RJQ) Peek(queue QueueID) chan JobResult {
+	srch := ZScanIter(rjq.Client, MakeKey(rjq.Namespace, string(queue)), "")
+	jobch := make(chan JobResult)
+
+	go func() {
+		defer close(jobch)
+		for sr := range srch {
+			// Check for an error coming from the StringResult channel
+			// Turn it into a JobResult
+			if sr.Error != nil {
+				jobch <- JobResult{nil, sr.Error}
+				return
+			}
+
+			// TODO: Check sr.Result for valid job data
+			//       Make Get return an error if the job does not exist.
+			job, err := rjq.Get(sr.Result)
+
+			// Check for an error with fetching the Job itself
+			if err != nil {
+				jobch <- JobResult{nil, err}
+				return
+			}
+
+			jobch <- JobResult{job, nil}
 		}
-		jobs = append(jobs, job)
-	}
-	return jobs, nil
+	}()
+
+	return jobch
 }
 
 func (rjq RJQ) CancelById(jobid string) error {

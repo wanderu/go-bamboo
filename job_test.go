@@ -1,3 +1,6 @@
+// Use of this source code is governed by the MIT License,
+// which can be found in the LICENSE file.
+
 package bamboo
 
 import (
@@ -28,11 +31,38 @@ func GenerateTestJobs(n int) (jobs []*Job) {
 	return jobs
 }
 
+// ComprareJobs compares a subset of job fields that should not change
+// over the lifetime of the job.
+func CompareJobs(a *Job, b *Job) bool {
+	return a.Priority == b.Priority &&
+		a.ID == b.ID &&
+		a.Payload == b.Payload &&
+		a.DateAdded == b.DateAdded &&
+		a.ContentType == b.ContentType &&
+		a.Encoding == b.Encoding
+}
+
 func TestJobSerialization(t *testing.T) {
 	job := GenerateTestJobs(1)[0]
 	jobarr := job.ToStringArray()
-	// fmt.Println(jobarr)
+
 	if !(len(jobarr) > 0) {
-		t.Error("Job not serialized properly to array.")
+		t.Fatal("Job not serialized properly to array.")
+	}
+
+	job2, err := JobFromStringArray(jobarr)
+
+	if err != nil {
+		t.Fatal("Error in JobFromStringArray", err)
+	}
+
+	// Ensure it's not empty
+	if CompareJobs(job, &Job{}) {
+		t.Fatal("Empty job. Invalid.")
+	}
+
+	// Ensure it's the same as the input Job
+	if !CompareJobs(job, job2) {
+		t.Fatal("Jobs don't match")
 	}
 }

@@ -14,17 +14,6 @@ import (
 
 const NS = "TEST"
 
-// ComprareJobs compares a subset of job fields that should not change
-// over the lifetime of the job.
-func CompareJobs(a *Job, b *Job) bool {
-	return a.Priority == b.Priority &&
-		a.ID == b.ID &&
-		a.Payload == b.Payload &&
-		a.DateAdded == b.DateAdded &&
-		a.ContentType == b.ContentType &&
-		a.Encoding == b.Encoding
-}
-
 func removeQueues(rjq *RJQ) {
 	kqueued := MakeKey(rjq.Namespace, "QUEUED")
 	kworking := MakeKey(rjq.Namespace, "WORKING")
@@ -134,20 +123,24 @@ func TestPeek(t *testing.T) {
 	}
 
 	// Peek all items
-	jobs2, err := rjq.Peek(3, QUEUED)
-	if err != nil {
-		t.Fatal(err)
-	}
+	jobch := rjq.Peek(QUEUED)
 
-	for i, job := range jobs2 {
-		if !CompareJobs(jobs[i], jobs2[i]) {
-			t.Fatal("TestPeek: jobs don't match.")
+	i := 0
+	for jr := range jobch {
+		if jr.Error != nil {
+			t.Fatal(jr.Error)
 		}
+
+		if !CompareJobs(jobs[i], jr.Job) {
+			t.Fatalf("TestPeek: jobs don't match. Iter: %d", i)
+		}
+
 		// Remove the items
-		err = rjq.Cancel(job)
+		err := rjq.Cancel(jr.Job)
 		if err != nil {
 			t.Fatal(err)
 		}
+		i++
 	}
 }
 
