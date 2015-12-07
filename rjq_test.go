@@ -7,7 +7,10 @@ import (
 	"fmt"
 	// "reflect"
 	"gopkg.in/redis.v3"
-	"runtime"
+	// "runtime"
+	// "strconv"
+	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -31,7 +34,7 @@ func removeQueues(rjq *RJQ) {
 
 	jobs, err := rjq.Client.Keys(alljobs).Result()
 	if err != nil {
-		fmt.Println(err)
+		fmt.Fprintln(os.Stderr, err)
 	}
 	rjq.Client.Del(jobs...)
 }
@@ -50,7 +53,7 @@ func TestMakeKey(t *testing.T) {
 }
 
 func pubsubTest(rjq *RJQ, t *testing.T) {
-	fmt.Println("Subscribing")
+	fmt.Fprintln(os.Stderr, "Subscribing")
 	notify, err := rjq.Subscribe()
 	if err != nil {
 		t.Fatal(err)
@@ -62,9 +65,9 @@ func pubsubTest(rjq *RJQ, t *testing.T) {
 			if !ok {
 				t.Fatal("notify !ok")
 			}
-			fmt.Println("TestTest Msg:", msg)
+			fmt.Fprintln(os.Stderr, "TestTest Msg:", msg)
 		case <-time.After(time.Duration(1) * time.Second):
-			fmt.Println("Timeout")
+			fmt.Fprintln(os.Stderr, "Timeout")
 		}
 
 		if i == 1 {
@@ -78,11 +81,27 @@ func TestTest(t *testing.T) {
 	rjq := MakeQueue(NS, conn)
 	defer conn.Close()
 	defer removeQueues(rjq)
-	for i := 0; i < 10; i++ {
-		pubsubTest(rjq, t)
-		fmt.Println("goroutines", runtime.NumGoroutine())
+
+	err := rjq.Test()
+	if err != nil {
+		t.Fatal(err)
 	}
-	time.Sleep(time.Duration(5) * time.Second)
+
+	fmt.Fprintln(os.Stderr, "TestTest stderr")
+
+	// for i := 0; i < 10; i++ {
+	// pubsubTest(rjq, t)
+	// fmt.Println("goroutines", runtime.NumGoroutine())
+	// }
+	// time.Sleep(time.Duration(5) * time.Second)
+	// fmt.Println(now)
+
+	// now := time.Now().UTC()
+	// fmt.Println(now)
+	// f := TimeToUnixTS(now)
+	// fmt.Printf("%f\n", f)
+	// now2 := UnixTSToTime(f)
+	// fmt.Println(now2.UTC())
 }
 
 func jobExistsInZSet(rjq *RJQ, job *Job, khmap string) bool {
@@ -105,8 +124,8 @@ func jobExistsInAnyZSet(rjq *RJQ, job *Job) bool {
 func printQueues(rjq *RJQ) {
 	for _, queue := range []string{"SCHEDULED", "WORKING", "QUEUED", "FAILED"} {
 		jobs, _ := rjq.Client.ZRange(MakeKey(rjq.Namespace, queue), 0, -1).Result()
-		fmt.Println(queue)
-		fmt.Println(jobs)
+		fmt.Fprintln(os.Stderr, queue)
+		fmt.Fprintln(os.Stderr, jobs)
 	}
 }
 
@@ -313,7 +332,7 @@ func TestRecover(t *testing.T) {
 
 	job2, err := rjq.Consume()
 	if err != nil {
-		fmt.Println(job2)
+		fmt.Fprintln(os.Stderr, job2)
 		t.Fatal("Consume failed.")
 	}
 	// Remove the active flag (Simulate worker expiration).
@@ -335,7 +354,7 @@ func TestRecover(t *testing.T) {
 		}
 		if job3.Failures != 1 {
 			printQueues(rjq)
-			fmt.Println(job3)
+			fmt.Fprintln(os.Stderr, job3)
 			t.Fatal("Failure count incorrect:", job3.Failures)
 		}
 	}
@@ -379,6 +398,45 @@ func TestMaxJobs(t *testing.T) {
 	_ = rjq.Client.Del(kmaxjobs)
 }
 
+func TestSchedule(t *testing.T) {
+	// 1. Establish Connection
+	conn := makeConn()
+	rjq := MakeQueue(NS, conn)
+	defer conn.Close()
+	defer removeQueues(rjq)
+
+	// 2. Make and schedule Job for future time
+	job1_a := GenerateTestJobs(1)[0]
+	now := time.Now().UTC()
+	nowsec := now.Unix()
+	fut := time.Unix(nowsec+1, 0).UTC()
+	err := rjq.Schedule(job1_a, fut)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. Test Consume too early
+	job1_b, err := rjq.Consume()
+	if !strings.HasPrefix(err.Error(), "NO_ITEMS") {
+		t.Fatal("Expected NO_ITEMS error.", err)
+	}
+	if err == nil {
+		t.Error("Retrieved a job but expected to retrieve none.")
+		fmt.Fprintln(os.Stderr, job1_b)
+	}
+
+	// 4. Test Consume after schedule time
+	time.Sleep(time.Duration(2) * time.Second)
+	job1_c, err := rjq.Consume()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !CompareJobs(job1_a, job1_c) {
+		t.Error("Job comparison failed.")
+	}
+}
+
 func TestAdd(t *testing.T) {
 	// 1. Establish Connection
 	conn := makeConn()
@@ -398,8 +456,6 @@ func TestAdd(t *testing.T) {
 	kworking := MakeKey(rjq.Namespace, "WORKING")
 	kscheduled := MakeKey(rjq.Namespace, "SCHEDULED")
 	kfailed := MakeKey(rjq.Namespace, "FAILED")
-	// fmt.Println("kqueued: ", kqueued)
-	// fmt.Println("kworking: ", kworking)
 	_ = rjq.Client.ZRem(kqueued, job.ID)
 	_ = rjq.Client.ZRem(kworking, job.ID)
 
@@ -426,7 +482,6 @@ func TestAdd(t *testing.T) {
 
 	// 4. Consume Job
 	job3, err := rjq.Consume()
-	// fmt.Println(job3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -443,7 +498,6 @@ func TestAdd(t *testing.T) {
 
 	// 6. Test that the Job is on the right queue
 	res, err := rjq.Client.ZScore(kworking, job.ID).Result()
-	// fmt.Println("Job score", res)
 
 	if res != job.Priority {
 		t.Fatal("Job Priority does not match.", res)
@@ -473,9 +527,9 @@ func TestAdd(t *testing.T) {
 	err = rjq.Fail(job, 3600)
 	job4, err := rjq.Consume()
 	if err != nil {
-		fmt.Println(err)
+		fmt.Fprintln(os.Stderr, err)
 	}
-	fmt.Println(job4)
+	fmt.Fprintln(os.Stderr, job4)
 	res, err = rjq.Client.ZScore(kscheduled, job.ID).Result()
 	// should not be on the scheduled queue
 	res, err = rjq.Client.ZScore(kfailed, job.ID).Result()

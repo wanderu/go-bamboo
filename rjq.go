@@ -10,6 +10,7 @@ package bamboo
 //go:generate go-bindata -prefix $BAMBOO_SCRIPTS_PFX -pkg $GOPACKAGE -o bamboo-scripts.go $BAMBOO_SCRIPTS
 
 import (
+	"errors"
 	"fmt"
 	"gopkg.in/redis.v3"
 	"math"
@@ -27,6 +28,7 @@ const (
 	QUEUED        QueueID = "QUEUED"
 	SCHEDULED     QueueID = "SCHEDULED"
 	WORKING       QueueID = "WORKING"
+	WORKERS       QueueID = "WORKERS"
 	FAILED        QueueID = "FAILED"
 	QUEUED_NOTIFY QueueID = "QUEUED:NOTIFY"
 )
@@ -68,6 +70,18 @@ type ConnectionError string
 
 func (e ConnectionError) Error() string {
 	return fmt.Sprintf("ConnectionError: %s", e)
+}
+
+/* This time conversion loses precision in the nanoseconds due to the
+conversion to/from float.
+*/
+
+func TimeToUnixTS(t time.Time) float64 {
+	return float64(t.UnixNano()) / 1e+9
+}
+
+func UnixTSToTime(f float64) time.Time {
+	return time.Unix(0, int64(f*1e+9))
 }
 
 /* MakeConn returns a redis connection object expected by RJQ.
@@ -117,7 +131,7 @@ func GenerateWorkerName() string {
 func MakeQueue(ns string, conn *redis.Client) (rjq *RJQ) {
 	// Make the object
 	rjq = &RJQ{
-		Namespace:  ns,
+		Namespace:  "{" + ns + "}",
 		Client:     conn,
 		Scripts:    make(map[string]*redis.Script),
 		WorkerName: GenerateWorkerName(),
@@ -131,7 +145,10 @@ func MakeQueue(ns string, conn *redis.Client) (rjq *RJQ) {
 			panic(err) // Not loading the script means this program is incorrect.
 		}
 		script := redis.NewScript(string(scriptSrc))
-		script.Load(rjq.Client)
+		res := script.Load(rjq.Client)
+		if res.Err() != nil {
+			panic(res.Err()) // If we can't load scripts, just fail.
+		}
 		rjq.Scripts[name] = script
 	}
 
@@ -143,6 +160,11 @@ func MakeQueue(ns string, conn *redis.Client) (rjq *RJQ) {
 func MakeKey(keys ...string) string {
 	return strings.Join(keys, SEP)
 }
+
+// func MakeJobKey(ns string, jobid string) string {
+// 	// {MY:NS:JOBS}:jobid
+// 	return fmt.Sprintf("{%s}:%s", MakeKey(ns, "JOBS"), jobid)
+// }
 
 func (rjq RJQ) Subscribe() (chan PSMsg, error) {
 	notify := make(chan PSMsg)
@@ -169,22 +191,44 @@ func (rjq RJQ) Subscribe() (chan PSMsg, error) {
 	return notify, nil
 }
 
-func (rjq RJQ) Add(job *Job) error {
-	keys := []string{rjq.Namespace}
-	args := []string{fmt.Sprintf("%f", job.Priority), job.ID}
+func (rjq RJQ) Enqueue(job *Job, priority float64, queue QueueID, force string) error {
+	if !(force == "1" || force == "0") {
+		return errors.New("Invalid force paramter.")
+	}
+	// <ns>
+	keys := []string{
+		rjq.Namespace,
+	}
+	// <queue> <priority> <jobid> <force> <key> <val> [<key> <val> ...]
+	args := []string{
+		string(queue),
+		fmt.Sprintf("%f", priority),
+		job.ID,
+		force,
+	}
 	args = append(args, job.ToStringArray()...)
-	val, err := rjq.Scripts["enqueue"].EvalSha(rjq.Client, keys, args).Result()
+	_, err := rjq.Scripts["enqueue"].EvalSha(rjq.Client, keys, args).Result()
 	if err != nil {
 		return err
 	}
-	// val should be 0 if the job already existed and 1 if the job was enqueued
-	// as expected.
-	if val == 0 {
-		// TODO: log that item already existed on queue
-	} else {
-		// TODO: log successful addition of job
-	}
 	return nil
+}
+
+func (rjq RJQ) Reschedule(job *Job, dt time.Time) error {
+	return rjq.Enqueue(job, TimeToUnixTS(dt), SCHEDULED, "1")
+}
+
+func (rjq RJQ) Schedule(job *Job, dt time.Time) error {
+	return rjq.Enqueue(job, TimeToUnixTS(dt), SCHEDULED, "0")
+}
+
+func (rjq RJQ) Requeue(job *Job, priority float64) error {
+	return rjq.Enqueue(job, priority, QUEUED, "1")
+}
+
+func (rjq RJQ) Add(job *Job) error {
+	// <ns> <kqueue> <kjob> <kqueued> <kscheduled> <kworking> <kfailed>
+	return rjq.Enqueue(job, job.Priority, QUEUED, "0")
 }
 
 /* Consume returns the next available Job object from the queue.
@@ -235,10 +279,6 @@ func (rjq RJQ) Get(jobid string) (job *Job, err error) {
 	}
 	job, err = JobFromStringArray(job_arr)
 	return job, nil
-}
-
-func (rjq RJQ) Schedule(*Job, time.Time) error {
-	return nil
 }
 
 func (rjq RJQ) Ack(job *Job) error {
