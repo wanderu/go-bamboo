@@ -25,11 +25,11 @@ will exist. For example, an application may have 1 set of queues under
 ### Building the Lua Scripts
 
 The Lua scripts required for this project are shared between multiple
-libraries. In order to build with them the bamboo-scripts repo must be checked
-out locally and available 
+libraries. In order to build with them the bamboo-scripts submodule must be
+initialized.
 
-    - Set the `BAMBOO_SCRIPTS_PFX` and `BAMBOO_SCRIPTS` environment variables to
-    point to */path/to* and */path/to/bamboo-scripts* respectively.
+    - `git submodule init`
+    - `git submodule update`
     - Run `go generate` in the project directory.
 
 ## Writing a Library in Another Language
@@ -53,10 +53,12 @@ Fields:
 
 Methods:
 
-    - ToJobArray()
-    - FromStringArray()
+    - Serialization
+        - ToStringArray(Job) -> []String
+            IE. [key1, value1, key2, value2 ...]
+        - FromStringArray([]String) -> Job
 
-### The RJQ Object
+### The RJQ (Redis Job Queue) Object
 
 Fields:
 
