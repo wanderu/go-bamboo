@@ -15,11 +15,10 @@
 
 package bamboo
 
-// Use `go generate` within the project directory after setting the
-// BAMBOO_SCRIPTS_PFX and BAMBOO_SCRIPTS environment variables to generate the
-// bamboo-scripts.go file.
+// Use `go generate` within the project directory after initializing
+// the bamboo-scripts git submodule to generate the bamboo-scripts.go file.
 //
-//go:generate go-bindata -prefix $BAMBOO_SCRIPTS_PFX -pkg $GOPACKAGE -o bamboo-scripts.go $BAMBOO_SCRIPTS
+//go:generate go-bindata -pkg $GOPACKAGE -o bamboo-scripts.go scripts/
 
 import (
 	"errors"
@@ -42,7 +41,8 @@ const (
 	WORKING       QueueID = "WORKING"
 	WORKERS       QueueID = "WORKERS"
 	FAILED        QueueID = "FAILED"
-	QUEUED_NOTIFY QueueID = "QUEUED:NOTIFY"
+	NOTIFY_QUEUED QueueID = "NOTIFY:QUEUED"
+	NOTIFY_SCHED  QueueID = "NOTIFY:SCHEDULED"
 )
 
 const MAX_RETRIES int = 3
@@ -164,6 +164,8 @@ func MakeQueue(ns string, conn *redis.Client) (rjq *RJQ) {
 		rjq.Scripts[name] = script
 	}
 
+	// Set name with redis. Client.SetName(rjq.WorkerName)?
+
 	return rjq
 }
 
@@ -180,7 +182,7 @@ func MakeKey(keys ...string) string {
 
 func (rjq RJQ) Subscribe() (chan PSMsg, error) {
 	notify := make(chan PSMsg)
-	pskey := MakeKey(rjq.Namespace, string(QUEUED_NOTIFY))
+	pskey := MakeKey(rjq.Namespace, string(NOTIFY_QUEUED))
 	pubsub, err := rjq.Client.Subscribe(pskey)
 	if err != nil {
 		return notify, err
