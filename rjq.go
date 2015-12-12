@@ -50,6 +50,7 @@ var ScriptNames = [...]string{
 	"ack",
 	"cancel",
 	"consume",
+	"can_consume",
 	"enqueue",
 	"fail",
 	"maxfailed",
@@ -279,6 +280,23 @@ func (rjq RJQ) Consume() (*Job, error) {
 		return nil, err
 	}
 	return job, nil
+}
+
+func (rjq RJQ) CanConsume() (bool, error) {
+	// <ns>
+	keys := []string{rjq.Namespace}
+	args := []string{fmt.Sprintf("%d", time.Now().UTC().Unix())}
+	val, err := rjq.Scripts["consume"].EvalSha(rjq.Client, keys, args).Result()
+	if err != nil {
+		return false, err
+	}
+
+	res, err := strconv.Atoi(val.(string))
+	if err != nil {
+		return false, err
+	}
+
+	return res > 0, nil
 }
 
 /* Get returns a Job object matching the specified jobid.
