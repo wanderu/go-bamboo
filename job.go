@@ -30,7 +30,7 @@ const (
 )
 
 // Job is an object representing the item stored in the queue.
-// Volatile paramters change over the life time of the Job.
+// The tags next to Job struct fields represent the redis HMAP key.
 type Job struct {
 	// Required - Set by user
 	ID       string  `bamboo:"id"`       // Unique per queue instance.

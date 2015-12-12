@@ -36,13 +36,11 @@ import (
 type QueueID string
 
 const (
-	QUEUED        QueueID = "QUEUED"
-	SCHEDULED     QueueID = "SCHEDULED"
-	WORKING       QueueID = "WORKING"
-	WORKERS       QueueID = "WORKERS"
-	FAILED        QueueID = "FAILED"
-	NOTIFY_QUEUED QueueID = "NOTIFY:QUEUED"
-	NOTIFY_SCHED  QueueID = "NOTIFY:SCHEDULED"
+	QUEUED    QueueID = "QUEUED"
+	SCHEDULED QueueID = "SCHEDULED"
+	WORKING   QueueID = "WORKING"
+	WORKERS   QueueID = "WORKERS"
+	FAILED    QueueID = "FAILED"
 )
 
 const MAX_RETRIES int = 3
@@ -137,7 +135,7 @@ func GenerateWorkerName() string {
 	if err != nil {
 		host = fmt.Sprintf("%d", rand.Int31())
 	}
-	return fmt.Sprintf("%s-%d", host, pid)
+	return fmt.Sprintf("%s-%d", host, pid) // TODO: Add random chars to end
 }
 
 func MakeQueue(ns string, conn *redis.Client) (rjq *RJQ) {
@@ -152,7 +150,7 @@ func MakeQueue(ns string, conn *redis.Client) (rjq *RJQ) {
 
 	// Load scripts
 	for _, name := range ScriptNames {
-		scriptSrc, err := Asset(fmt.Sprintf("bamboo-scripts/%s.lua", name))
+		scriptSrc, err := Asset(fmt.Sprintf("scripts/%s.lua", name))
 		if err != nil {
 			panic(err) // Not loading the script means this program is incorrect.
 		}
@@ -182,7 +180,7 @@ func MakeKey(keys ...string) string {
 
 func (rjq RJQ) Subscribe() (chan PSMsg, error) {
 	notify := make(chan PSMsg)
-	pskey := MakeKey(rjq.Namespace, string(NOTIFY_QUEUED))
+	pskey := MakeKey(rjq.Namespace, string(QUEUED))
 	pubsub, err := rjq.Client.Subscribe(pskey)
 	if err != nil {
 		return notify, err
@@ -309,6 +307,7 @@ func (rjq RJQ) Ack(job *Job) error {
 func (rjq RJQ) Fail(job *Job, requeue_seconds int) error {
 	keys := []string{rjq.Namespace}
 	if requeue_seconds < 0 {
+		// 0, 1, 4, 9, 16, 25 ... hours
 		requeue_seconds = int(3600 * math.Pow(float64(job.Failures), 2))
 	}
 	args := []string{

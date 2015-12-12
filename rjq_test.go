@@ -458,6 +458,53 @@ func TestSchedule(t *testing.T) {
 	}
 }
 
+func TestRecoverTimeout(t *testing.T) {
+	// 1. Establish Connection
+	conn := makeConn()
+	rjq := MakeQueue(NS, conn)
+	rjq.WorkerName = "worker1"
+	rjq.JobExp = 1 // 1 second expiration
+
+	defer conn.Close()
+	defer removeQueues(rjq)
+
+	// 2. Make and add Job
+	job_a := GenerateTestJobs(1)[0]
+
+	rjq.Add(job_a)
+	_, err := rjq.Consume()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Sleep longer than the expiration time
+	time.Sleep(time.Duration(2) * time.Second)
+	rjq.Recover()
+
+	jobch := rjq.Peek(FAILED)
+
+	jr := <-jobch
+	if jr.Error != nil {
+		t.Fatal(jr.Error)
+	}
+	// TODO: Select with fail
+
+	if !CompareJobs(job_a, jr.Job) {
+		fmt.Fprintln(os.Stderr, job_a)
+		fmt.Fprintln(os.Stderr, jr.Job)
+		t.Fatal("Jobs do not compare")
+	}
+
+	if !(jr.Job.Failures == 1) {
+		t.Fatal("Unexpected failure count", jr.Job.Failures)
+	}
+
+	if !(jr.Job.State == "failed") {
+		t.Fatal("Unexpected state", jr.Job.State)
+	}
+
+}
+
 func TestAdd(t *testing.T) {
 	// 1. Establish Connection
 	conn := makeConn()
