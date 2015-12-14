@@ -458,6 +458,39 @@ func TestSchedule(t *testing.T) {
 	}
 }
 
+func TestCanConsume(t *testing.T) {
+	// 1. Establish Connection
+	conn := makeConn()
+	rjq := MakeQueue(NS, conn)
+	defer conn.Close()
+	defer removeQueues(rjq)
+
+	res, err := rjq.CanConsume()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if res {
+		t.Fatal("CanConsume returned true even though we haven't added anything yet.")
+	}
+
+	job_a := GenerateTestJobs(1)[0]
+
+	err = rjq.Add(job_a)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err = rjq.CanConsume()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !res {
+		t.Fatal("CanConsume returned false even though we added an item.")
+	}
+}
+
 func TestRecoverTimeout(t *testing.T) {
 	// 1. Establish Connection
 	conn := makeConn()

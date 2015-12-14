@@ -256,7 +256,7 @@ Known error reply prefixes:
 func (rjq RJQ) Consume() (*Job, error) {
 	// <ns>
 	keys := []string{rjq.Namespace}
-	// <client_name> <datetime> <job_id> <expires>
+	// <client_name> <job_id> <datetime> <expires>
 	args := []string{
 		rjq.WorkerName,
 		"",
@@ -285,18 +285,14 @@ func (rjq RJQ) Consume() (*Job, error) {
 func (rjq RJQ) CanConsume() (bool, error) {
 	// <ns>
 	keys := []string{rjq.Namespace}
+	// <datetime>
 	args := []string{fmt.Sprintf("%d", time.Now().UTC().Unix())}
-	val, err := rjq.Scripts["consume"].EvalSha(rjq.Client, keys, args).Result()
+	val, err := rjq.Scripts["can_consume"].EvalSha(rjq.Client, keys, args).Result()
 	if err != nil {
 		return false, err
 	}
-
-	res, err := strconv.Atoi(val.(string))
-	if err != nil {
-		return false, err
-	}
-
-	return res > 0, nil
+	// returning a int from a redis script is returned as an int64
+	return val.(int64) > 0, nil
 }
 
 /* Get returns a Job object matching the specified jobid.
