@@ -1,0 +1,10 @@
+name: 'Backup to S3'
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # Run daily at midnight
+  workflow_dispatch:
+
+jobs:
+  backup-to-s3:
+    uses: wanderu/actions/.github/workflows/backup-to-s3.yaml@latest
